@@ -331,6 +331,9 @@
         <h2 class="font-display text-2xl">RECOMMENDED</h2>
         <div class="flex items-center gap-2">
           <span class="rec-subtitle text-xs text-slate-400">Popular &amp; new</span>
+          <span id="recDataStatus" class="hidden inline-flex items-center" title="" aria-label="Recommendation data status">
+            <span id="recDataStatusDot" class="dot" style="width:8px;height:8px;background:#facc15"></span>
+          </span>
           <button id="recRefreshBtn" type="button" class="btn bg-panel2 border border-line text-xs font-semibold px-2.5 py-1.5 rounded-lg" aria-label="Refresh recommendations">
             <i class="fa-solid fa-rotate-right mr-1"></i>Refresh
           </button>
@@ -491,7 +494,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.8</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.9</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -757,6 +760,10 @@
   let MOVIE_DB = [];
   const movieByTitle = new Map();   // normalized title -> db entry
   const movieByKey = new Map();     // looser dbKey -> db entry (punctuation-insensitive)
+  let movieDbStatus = 'idle';       // idle | loading | ready | error
+  let movieDbError = '';
+  let embeddingsStatus = 'idle';    // idle | loading | ready | error
+  let embeddingsError = '';
 
   // Base TMDB poster domain. sync.py stores only the relative path suffix in the
   // binary catalogue (e.g. "/lh4v5.jpg"); we re-prefix it here at load time.
@@ -865,6 +872,8 @@
   }
 
   async function loadMovieDb() {
+    movieDbStatus = 'loading';
+    movieDbError = '';
     try {
       const res = await fetch('movies.pbf', { cache: 'no-cache' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -873,17 +882,25 @@
       if (!Catalog) throw new Error('protobuf decoder unavailable');
       const decoded = Catalog.decode(new Uint8Array(buf));
       MOVIE_DB = (decoded.movies || []).map(inflateMovie);
+      movieDbStatus = 'ready';
     } catch (e) {
       // Recommendations are a progressive enhancement: the app still works for
       // freeform titles if the catalogue can't be fetched/decoded (e.g. file://).
       MOVIE_DB = [];
+      movieDbStatus = 'error';
+      movieDbError = (e && e.message) ? e.message : 'unknown error';
       console.warn('Could not load movies.pbf:', e);
     }
     indexMovieDb();
     if (typeof renderAll === 'function') renderAll();
-    // Lazy-load the (much larger) embeddings binary in the background so the UI
-    // is interactive immediately. Group-taste matching upgrades in once it lands.
-    loadEmbeddings();
+    if (movieDbStatus === 'ready') {
+      // Lazy-load the (much larger) embeddings binary in the background so the UI
+      // is interactive immediately. Group-taste matching upgrades in once it lands.
+      loadEmbeddings();
+    } else {
+      embeddingsStatus = 'idle';
+      embeddingsError = '';
+    }
   }
 
   // Fetch embeddings.bin after the catalogue is on screen and stash the raw bytes
@@ -891,13 +908,25 @@
   // views out of it by v_idx. Failure is non-fatal: the engine simply falls back
   // to neutral similarity scores.
   async function loadEmbeddings() {
+    embeddingsStatus = 'loading';
+    embeddingsError = '';
+    if (typeof renderAll === 'function') renderAll();
     try {
       const res = await fetch('embeddings.bin', { cache: 'no-cache' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      window.EMBEDDINGS_BUFFER = await res.arrayBuffer();
+      const buf = await res.arrayBuffer();
+      if (!buf.byteLength || (buf.byteLength % (EMBED_DIM * 4)) !== 0) {
+        throw new Error('invalid embeddings size');
+      }
+      window.EMBEDDINGS_BUFFER = buf;
+      embeddingsStatus = 'ready';
     } catch (e) {
       // Leave EMBEDDINGS_BUFFER undefined so the cosine helper keeps its default.
+      window.EMBEDDINGS_BUFFER = undefined;
+      embeddingsStatus = 'error';
+      embeddingsError = (e && e.message) ? e.message : 'unknown error';
       console.warn('Could not load embeddings.bin:', e);
+      if (typeof renderAll === 'function') renderAll();
       return;
     }
     // Our own taste vector now resolves — recompute, re-share and re-render.
@@ -978,8 +1007,18 @@
     return out;
   }
   const starString = (n) => {
-    const filled = Math.max(0, Math.min(5, Math.round(n || 0)));
-    return '★'.repeat(filled) + '☆'.repeat(5 - filled);
+    const rating = Math.max(0, Math.min(5, Number(n) || 0));
+    const full = Math.floor(rating);
+    const frac = rating - full;
+    const hasHalf = frac >= 0.25 && frac < 0.75;
+    const fullCount = full + (frac >= 0.75 ? 1 : 0);
+    let out = '';
+    for (let i = 1; i <= 5; i++) {
+      if (i <= fullCount) out += '<i class="fa-solid fa-star"></i>';
+      else if (hasHalf && i === full + 1) out += '<i class="fa-solid fa-star-half-stroke"></i>';
+      else out += '<i class="fa-regular fa-star text-slate-500"></i>';
+    }
+    return out;
   };
 
   // 👀 "seen by" indicator markup. Empty string when nobody in the room has
@@ -990,7 +1029,7 @@
     const rows = seers.map((s) => `
       <div class="flex items-center justify-between gap-3 text-xs px-1 py-0.5">
         <span class="truncate">${escapeHtml(s.name)}</span>
-        <span class="text-gold whitespace-nowrap">${s.rating ? escapeHtml(starString(s.rating)) : '<span class=\'text-slate-500\'>unrated</span>'}</span>
+        <span class="text-gold whitespace-nowrap">${s.rating ? starString(s.rating) : '<span class=\'text-slate-500\'>unrated</span>'}</span>
       </div>`).join('');
     return `
       <span class="seen-wrap inline-flex items-center" tabindex="0"
@@ -1683,8 +1722,8 @@
     const everyone = total > 0 && finished === total;
 
     box.textContent = everyone
-      ? `✅ Everyone's ready — all ${total} ${total === 1 ? 'player has' : 'players have'} added their movies.`
-      : `⏳ ${finished} of ${total} ${total === 1 ? 'player' : 'players'} finished adding movies…`;
+      ? `✅ Everyone's ready — all ${total} ${total === 1 ? 'participant has' : 'participants have'} added their movies.`
+      : `⏳ ${finished} of ${total} ${total === 1 ? 'participant' : 'participants'} finished adding movies…`;
     box.classList.toggle('border-emerald-500/50', everyone);
     box.classList.toggle('bg-emerald-500/10', everyone);
     box.classList.toggle('text-emerald-300', everyone);
@@ -2454,14 +2493,50 @@
         <div class="p-2 flex flex-col gap-1 flex-1">
           <div class="rec-title text-xs font-medium leading-snug">${safeTitle}${m.year ? ` <span class="text-slate-500">(${escapeHtml(String(m.year))})</span>` : ''}</div>
           ${why}
-          ${seen || lang ? `<div class="flex items-center gap-1 flex-wrap text-[11px]">${seen}${lang}</div>` : ''}
-          ${ratings ? `<div class="text-[10px] text-slate-400 truncate">${ratings}</div>` : ''}
-          <button class="rec-nominate btn mt-auto w-full text-xs font-semibold py-1.5 rounded-lg ${canNominate ? 'btn-primary text-white' : 'opacity-40 cursor-not-allowed'}"
-                  data-title="${safeTitle}" ${canNominate ? '' : 'disabled'}>
-            <i class="fa-solid fa-plus mr-1"></i>Nominate
-          </button>
+          <div class="mt-auto space-y-1">
+            ${seen || lang ? `<div class="flex items-center gap-1 flex-wrap text-[11px]">${seen}${lang}</div>` : ''}
+            ${ratings ? `<div class="text-[10px] text-slate-400 truncate">${ratings}</div>` : ''}
+            <button class="rec-nominate btn w-full text-xs font-semibold py-1.5 rounded-lg ${canNominate ? 'btn-primary text-white' : 'opacity-40 cursor-not-allowed'}"
+                    data-title="${safeTitle}" ${canNominate ? '' : 'disabled'}>
+              <i class="fa-solid fa-plus mr-1"></i>Nominate
+            </button>
+          </div>
         </div>
       </div>`;
+  }
+
+  function recommendationDataStatus() {
+    if (movieDbStatus === 'error') {
+      return { level: 'error', message: `Recommendations unavailable: couldn't load movies (${movieDbError || 'unknown error'}).` };
+    }
+    if (movieDbStatus === 'loading') {
+      return { level: 'loading', message: 'Loading recommendation movies…' };
+    }
+    if (embeddingsStatus === 'error') {
+      return { level: 'error', message: `Embeddings unavailable: couldn't load recommendation vectors (${embeddingsError || 'unknown error'}).` };
+    }
+    if (embeddingsStatus === 'loading') {
+      return { level: 'loading', message: 'Loading recommendation vectors…' };
+    }
+    return null;
+  }
+
+  function renderRecommendationDataStatus() {
+    const wrap = $('#recDataStatus');
+    const dot = $('#recDataStatusDot');
+    if (!wrap || !dot) return;
+    const status = recommendationDataStatus();
+    wrap.classList.toggle('hidden', !status);
+    if (!status) {
+      wrap.title = '';
+      wrap.setAttribute('aria-label', 'Recommendation data status');
+      dot.classList.remove('pulse');
+      return;
+    }
+    wrap.title = status.message;
+    wrap.setAttribute('aria-label', status.message);
+    dot.style.background = status.level === 'error' ? '#ef4444' : '#facc15';
+    dot.classList.toggle('pulse', status.level === 'loading');
   }
 
   function renderRecommendations(forceRefresh = false) {
@@ -2471,11 +2546,23 @@
     const subtitle = section && section.querySelector('.rec-subtitle');
     if (!section || !track) return;
 
-    // Only relevant while nominating; never show without a catalogue to draw from.
-    if (state.phase !== 'lobby' || !MOVIE_DB.length) { section.classList.add('hidden'); return; }
+    const hasMovieDbError = movieDbStatus === 'error';
+    // Only relevant while nominating. If the catalogue fails to load, keep the
+    // section visible so the status indicator can explain why.
+    if (state.phase !== 'lobby' || (!MOVIE_DB.length && !hasMovieDbError)) { section.classList.add('hidden'); return; }
+    renderRecommendationDataStatus();
+    section.classList.remove('hidden');
+
+    if (hasMovieDbError) {
+      track.innerHTML = '';
+      if (empty) {
+        empty.textContent = 'Recommendations are currently unavailable because movie data failed to load.';
+        empty.classList.remove('hidden');
+      }
+      return;
+    }
 
     const { list: recs, personalised, totalAvailable } = getRecommendations({ forceRefresh });
-    section.classList.remove('hidden');
 
     // Update the subtitle to reflect the recommendation mode.
     if (subtitle) subtitle.textContent = personalised ? 'Picks for you' : 'Popular & new';
