@@ -173,6 +173,9 @@ def movie_dict_to_proto(movie: Dict[str, Any], msg: "catalog_pb2.Movie") -> None
     for member in movie.get("cast") or []:
         msg.cast.append(str(member))
 
+    msg.vote_count = int(movie.get("vote_count", 0) or 0)
+    msg.popularity = float(movie.get("popularity", 0.0) or 0.0)
+
 
 def movie_proto_to_dict(msg: "catalog_pb2.Movie") -> Dict[str, Any]:
     """Inflate a ``catalog_pb2.Movie`` back to our internal dict representation."""
@@ -199,6 +202,10 @@ def movie_proto_to_dict(msg: "catalog_pb2.Movie") -> Dict[str, Any]:
         movie["cast"] = list(msg.cast)
     if msg.director:
         movie["director"] = list(msg.director)
+    if msg.vote_count:
+        movie["vote_count"] = msg.vote_count
+    if msg.popularity:
+        movie["popularity"] = msg.popularity
     return movie
 
 
