@@ -3112,13 +3112,19 @@
         }
       });
     });
+    track.querySelectorAll('.rec-watched').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openRateModal(btn.dataset.title || '');
+      });
+    });
     track.querySelectorAll('.rec-card').forEach((card) => {
       card.addEventListener('click', (e) => {
-        if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-why-wrap')) return;
+        if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-why-wrap')) return;
         openRecommendationDetail(card.dataset.title || '');
       });
       card.addEventListener('keydown', (e) => {
-        if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-why-wrap')) return;
+        if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-why-wrap')) return;
         e.preventDefault();
         openRecommendationDetail(card.dataset.title || '');
       });
@@ -3492,13 +3498,19 @@
             }
           });
         });
+        tempDiv.querySelectorAll('.rec-watched').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openRateModal(btn.dataset.title || '');
+          });
+        });
         tempDiv.querySelectorAll('.rec-card').forEach((card) => {
           card.addEventListener('click', (e) => {
-            if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-why-wrap')) return;
+            if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-why-wrap')) return;
             openRecommendationDetail(card.dataset.title || '');
           });
           card.addEventListener('keydown', (e) => {
-            if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-why-wrap')) return;
+            if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-why-wrap')) return;
             e.preventDefault();
             openRecommendationDetail(card.dataset.title || '');
           });
