@@ -254,6 +254,11 @@
             </div>
             <button id="syncDeviceBtn" type="button"
                     class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-qrcode w-4 mr-1.5 text-slate-400"></i>Sync</button>
+            <div class="my-1 border-t border-line"></div>
+            <button id="resetPreferencesBtn" type="button"
+                    class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-rotate-left w-4 mr-1.5 text-slate-400"></i>Reset preferences</button>
+            <button id="deleteAllDataBtn" type="button"
+                    class="w-full text-left text-sm px-3 py-2 rounded-lg text-red-400 hover:bg-red-500/10"><i class="fa-solid fa-trash w-4 mr-1.5 text-red-400"></i>Delete all data</button>
           </div>
         </div>
       </div>
@@ -3871,6 +3876,32 @@
     if (currentView === 'history') renderHistory();
   }
 
+  function resetPreferences() {
+    if (!confirm('Are you sure you want to reset your training data? This will clear your watchlist, interested ratings, and not-interested skips.')) return;
+    localStorage.removeItem(WATCHLIST_KEY);
+    localStorage.removeItem(INTERESTED_KEY);
+    localStorage.removeItem(NOT_INTERESTED_KEY);
+    trainQueue = [];
+    trainCurrent = null;
+    trainPrerenderedCardHtml = null;
+    afterTasteChange();
+    if (typeof renderAll === 'function') renderAll();
+    alert('Training data has been reset.');
+  }
+
+  function deleteAllData() {
+    if (!confirm('Are you sure you want to delete all data? This will delete your name, history, ratings, watchlist, and training preferences, and reset the app.')) return;
+    localStorage.removeItem(NAME_STORAGE_KEY);
+    localStorage.removeItem(HISTORY_KEY);
+    localStorage.removeItem(WATCHED_KEY);
+    localStorage.removeItem(WATCHLIST_KEY);
+    localStorage.removeItem(INTERESTED_KEY);
+    localStorage.removeItem(NOT_INTERESTED_KEY);
+    try { sessionStorage.removeItem(HOST_ROOM_KEY); } catch (e) {}
+    try { sessionStorage.removeItem(REC_SESSION_SEEN_KEY); } catch (e) {}
+    window.location.reload();
+  }
+
   // ---- Import confirm dialog (used by file import + device sync) ----
   let pendingImport = null;
   function openImportConfirm(data, sourceLabel) {
@@ -4234,6 +4265,8 @@
     $('#importDataBtn').addEventListener('click', () => { closeSettingsMenu(); $('#importFileInput').click(); });
     $('#importLetterboxdBtn').addEventListener('click', () => { closeSettingsMenu(); $('#letterboxdFileInput').click(); });
     $('#syncDeviceBtn').addEventListener('click', () => { closeSettingsMenu(); openSyncModal(); });
+    $('#resetPreferencesBtn').addEventListener('click', () => { closeSettingsMenu(); resetPreferences(); });
+    $('#deleteAllDataBtn').addEventListener('click', () => { closeSettingsMenu(); deleteAllData(); });
 
     // Letterboxd import instructions: toggle on click, reveal on hover.
     const lbInfoBtn = $('#letterboxdInfoBtn');
