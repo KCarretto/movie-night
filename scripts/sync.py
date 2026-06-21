@@ -323,15 +323,31 @@ class TMDBClient:
         raise RuntimeError(f"TMDB request failed: {url}: {last_error}")
 
 
-def fetch_omdb(api_key: str, imdb_id: str) -> Optional[Dict[str, Any]]:
+def fetch_omdb(
+    api_key: str, imdb_id: str, max_retries: int = 3, pause: float = 0.25
+) -> Optional[Dict[str, Any]]:
     if not api_key or not imdb_id:
         return None
     url = OMDB_BASE + "?" + urllib.parse.urlencode({"apikey": api_key, "i": imdb_id})
-    try:
-        data = _http_get_json(url)
-    except (urllib.error.URLError, ValueError):
-        return None
-    return data if data.get("Response") == "True" else None
+    last_error: Optional[Exception] = None
+    for attempt in range(max_retries):
+        try:
+            time.sleep(pause)
+            data = _http_get_json(url)
+            return data if data.get("Response") == "True" else None
+        except urllib.error.HTTPError as err:
+            if err.code == 429:
+                wait = int(err.headers.get("Retry-After", "1")) + 1
+                time.sleep(wait)
+                last_error = err
+                continue
+            last_error = err
+            time.sleep(1 + attempt)
+        except (urllib.error.URLError, ValueError) as err:
+            last_error = err
+            time.sleep(1 + attempt)
+    print(f"\n  OMDb skip {imdb_id}: {last_error}", file=sys.stderr)
+    return None
 
 
 def collect_movies_to_fetch(
@@ -375,14 +391,27 @@ def collect_movies_to_fetch(
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
-def generate(
+def iter_new_movies(
     pages: int,
     tmdb_key: str,
     omdb_key: str,
     pause: float = 0.25,
-    existing: Optional[List[Dict[str, Any]]] = None,
+    known_ids: Optional[set] = None,
+    known_titles: Optional[set] = None,
     extra_ids: Optional[Iterable[int]] = None,
-) -> Dict[str, Any]:
+) -> Iterable[Dict[str, Any]]:
+    """Yield newly-discovered movies one at a time (generator).
+
+    Movies whose TMDB id or normalised title already appears in *known_ids* /
+    *known_titles* are skipped so callers can resume an existing catalogue.
+    De-duplication within this run is also handled inline: each yielded movie's
+    id and title key are added to the sets immediately so later duplicates from
+    the same run are dropped.
+
+    Yields one fully-built movie dict per successfully downloaded entry, so
+    callers can write each record to disk immediately and never hold more than
+    a handful of objects in memory at once.
+    """
     if pages > TMDB_MAX_PAGE:
         print(
             f"Note: TMDB caps lists at {TMDB_MAX_PAGE} pages; clamping --pages "
@@ -390,6 +419,10 @@ def generate(
             file=sys.stderr,
         )
         pages = TMDB_MAX_PAGE
+
+    # Work on private copies so we don't mutate the caller's sets.
+    seen_ids: set = set(known_ids or ())
+    seen_titles: set = set(known_titles or ())
 
     client = TMDBClient(tmdb_key, pause=pause)
 
@@ -411,22 +444,16 @@ def generate(
         if added:
             print(f"Added {added} movie id(s) from --ids-file.", file=sys.stderr)
 
-    # Resume support: keep movies we already have and only download the new ones.
-    # Skip by TMDB id when known (covers ids-file entries with no title yet) and
-    # fall back to a normalized title match for legacy records without an id.
-    existing = existing or []
-    known_ids = {m.get("tmdb_id") for m in existing if isinstance(m.get("tmdb_id"), int)}
-    known_titles = {title_key(m.get("title", "")) for m in existing if m.get("title")}
+    # Filter out already-known entries before downloading anything.
     pending = [
         (mid, title)
         for (mid, title) in candidates
-        if mid not in known_ids and (not title or title_key(title) not in known_titles)
+        if mid not in seen_ids and (not title or title_key(title) not in seen_titles)
     ]
     skipped = len(candidates) - len(pending)
     if skipped:
         print(f"Skipping {skipped} movie(s) already in the catalogue.", file=sys.stderr)
 
-    movies: List[Dict[str, Any]] = list(existing)
     progress = Progress("Downloading details", total=len(pending))
     for movie_id, _title in pending:
         progress.update()
@@ -438,15 +465,22 @@ def generate(
         except (RuntimeError, urllib.error.HTTPError) as err:
             print(f"\n  skip {movie_id}: {err}", file=sys.stderr)
             continue
-        omdb = fetch_omdb(omdb_key, detail.get("imdb_id", "")) if omdb_key else None
+        omdb = fetch_omdb(omdb_key, detail.get("imdb_id", ""), pause=pause) if omdb_key else None
         movie = build_movie(detail, omdb)
-        if movie:
-            movies.append(movie)
-    progress.done(suffix=f"{len(movies)} movies total")
-
-    movies = dedupe_movies(movies)
-    movies.sort(key=lambda m: (m["ratings"].get("imdb") or 0), reverse=True)
-    return wrap_output(movies, bool(omdb_key))
+        if not movie:
+            continue
+        # Inline de-duplication: skip if we've already seen this title/id in
+        # this run (e.g. the same film appeared in multiple TMDB list pages).
+        key = title_key(movie.get("title", ""))
+        if key and key in seen_titles:
+            continue
+        if key:
+            seen_titles.add(key)
+        mid = movie.get("tmdb_id")
+        if isinstance(mid, int):
+            seen_ids.add(mid)
+        yield movie
+    progress.done()
 
 
 def load_existing(path: str) -> List[Dict[str, Any]]:
@@ -466,19 +500,20 @@ def default_ids_filename(today: Optional[datetime.date] = None) -> str:
     return today.strftime("movie_ids_%m_%d_%Y.json")
 
 
-def load_ids_file(path: str) -> List[int]:
-    """Read TMDB movie ids from a daily export file.
+def load_ids_file(path: str) -> Iterable[int]:
+    """Yield TMDB movie ids from a daily export file one at a time.
 
     The TMDB export (https://files.tmdb.org/p/exports/) is *newline-delimited*
     JSON — one object per line, e.g.::
 
         {"adult":false,"id":3924,"original_title":"Blondie","popularity":0.48}
 
-    Missing files are not an error: an empty list is returned so the caller can
-    continue with discovery only. Malformed lines are skipped individually.
+    Implemented as a generator so the (potentially very large) export file is
+    never fully loaded into memory — each id is yielded as its line is read.
+
+    Missing files are not an error: the generator simply yields nothing so the
+    caller can continue with discovery only. Malformed lines are skipped individually.
     """
-    ids: List[int] = []
-    seen = set()
     try:
         with open(path, "r", encoding="utf-8") as handle:
             for line in handle:
@@ -490,30 +525,30 @@ def load_ids_file(path: str) -> List[int]:
                 except ValueError:
                     continue
                 movie_id = obj.get("id") if isinstance(obj, dict) else None
-                if isinstance(movie_id, int) and movie_id not in seen:
-                    seen.add(movie_id)
-                    ids.append(movie_id)
+                if isinstance(movie_id, int):
+                    yield movie_id
     except OSError:
-        return []
-    return ids
+        return
 
 
-def wrap_output(movies: List[Dict[str, Any]], used_omdb: bool) -> Dict[str, Any]:
+def _make_comment(used_omdb: bool) -> str:
+    """Build the ``comment`` string for the movies.json wrapper."""
     rt_note = (
         "rottenTomatoes is the Rotten Tomatoes Tomatometer percentage from OMDb"
         if used_omdb
         else "rottenTomatoes is null because no OMDB_API_KEY was provided"
     )
-    return {
-        "comment": (
-            "Auto-generated by scripts/sync.py. "
-            "letterboxd is an estimate (TMDB vote average / 2, out of 5); "
-            f"{rt_note}; imdb is out of 10. "
-            "language is the primary (original) language ISO 639-1 code. "
-            "art is a TMDB poster URL with an in-app fallback if it fails to load."
-        ),
-        "movies": movies,
-    }
+    return (
+        "Auto-generated by scripts/sync.py. "
+        "letterboxd is an estimate (TMDB vote average / 2, out of 5); "
+        f"{rt_note}; imdb is out of 10. "
+        "language is the primary (original) language ISO 639-1 code. "
+        "art is a TMDB poster URL with an in-app fallback if it fails to load."
+    )
+
+
+def wrap_output(movies: List[Dict[str, Any]], used_omdb: bool) -> Dict[str, Any]:
+    return {"comment": _make_comment(used_omdb), "movies": movies}
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
@@ -576,17 +611,80 @@ def main(argv: Optional[List[str]] = None) -> int:
     if existing:
         print(f"Resuming from {len(existing)} movie(s) in {args.output}.", file=sys.stderr)
 
-    ids = load_ids_file(args.ids_file)
-    if ids:
-        print(f"Loaded {len(ids)} movie id(s) from {args.ids_file}.", file=sys.stderr)
+    # Build resume sets from existing movies so iter_new_movies can skip them.
+    # We derive them here rather than inside the generator so the generator
+    # doesn't need to hold the full existing list.
+    known_ids: set = {
+        m.get("tmdb_id") for m in existing if isinstance(m.get("tmdb_id"), int)
+    }
+    known_titles: set = {
+        title_key(m.get("title", "")) for m in existing if m.get("title")
+    }
+
+    if os.path.isfile(args.ids_file):
+        print(f"Importing movie ids from {args.ids_file}.", file=sys.stderr)
+        ids: Optional[Iterable[int]] = load_ids_file(args.ids_file)
     else:
         print(f"No ids imported from {args.ids_file} (missing or empty).", file=sys.stderr)
+        ids = None
 
-    payload = generate(args.pages, tmdb_key, omdb_key, args.pause, existing, ids)
-    with open(args.output, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, ensure_ascii=False)
-        handle.write("\n")
-    print(f"Wrote {len(payload['movies'])} movies to {args.output}", file=sys.stderr)
+    new_movies = iter_new_movies(
+        args.pages, tmdb_key, omdb_key, args.pause, known_ids, known_titles, ids
+    )
+
+    # Write the output incrementally so we never hold all movies in memory at
+    # once.  We build the JSON manually (header + per-movie lines + footer)
+    # rather than calling json.dump on the whole structure.
+    #
+    # Layout:
+    #   {
+    #     "comment": "...",
+    #     "movies": [
+    #       {...},
+    #       ...
+    #     ]
+    #   }
+    comment = _make_comment(bool(omdb_key))
+    tmp_path = args.output + ".tmp"
+    total = 0
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            handle.write("{\n  ")
+            handle.write('"comment": ')
+            handle.write(json.dumps(comment, ensure_ascii=False))
+            handle.write(',\n  "movies": [')
+
+            first = True
+
+            # Stream existing movies to disk first, then release the list so
+            # memory occupied by those objects can be reclaimed before we start
+            # the download phase.
+            for movie in existing:
+                handle.write((",\n" if not first else "\n") + "    ")
+                handle.write(json.dumps(movie, ensure_ascii=False))
+                first = False
+                total += 1
+            del existing
+
+            # Stream each newly downloaded movie directly to disk — only one
+            # object is in memory at a time.
+            for movie in new_movies:
+                handle.write((",\n" if not first else "\n") + "    ")
+                handle.write(json.dumps(movie, ensure_ascii=False))
+                first = False
+                total += 1
+
+            handle.write("\n  ]\n}\n")
+
+        os.replace(tmp_path, args.output)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
+
+    print(f"Wrote {total} movies to {args.output}", file=sys.stderr)
     return 0
 
 
