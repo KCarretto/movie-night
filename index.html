@@ -1086,20 +1086,12 @@
     let startY = 0;
     let started = false;            // becomes true once movement exceeds threshold
 
-    li.addEventListener('pointerdown', (e) => {
-      if (hasVotedLocally) return;
-      if (e.button != null && e.button !== 0) return;   // primary button only
-      // Let the arrow buttons receive their own taps.
-      if (e.target.closest('button')) return;
-      dragging = true;
-      started = false;
-      activePointer = e.pointerId;
-      startX = e.clientX;
-      startY = e.clientY;
-      try { li.setPointerCapture(e.pointerId); } catch (_) {}
-    });
-
-    li.addEventListener('pointermove', (e) => {
+    // Document-level handlers are attached only for the duration of a drag.
+    // Moving the <li> in the DOM (insertBefore/appendChild) while a pointer
+    // capture is active makes iOS Safari/Chrome drop the capture and fire
+    // pointercancel, freezing the gesture. Binding to the document instead of
+    // capturing the pointer keeps move/up/cancel flowing through the drag.
+    const onMove = (e) => {
       if (!dragging || e.pointerId !== activePointer) return;
       // Begin the drag only after a small threshold so taps aren't hijacked.
       if (!started) {
@@ -1114,7 +1106,7 @@
       if (after == null) ul.appendChild(li);
       else if (after !== li) ul.insertBefore(li, after);
       renumberBallot();
-    });
+    };
 
     const end = (e) => {
       if (!dragging || (activePointer !== null && e.pointerId !== activePointer)) return;
@@ -1122,7 +1114,9 @@
       ballotDragging = false;
       activePointer = null;
       li.classList.remove('dragging');
-      try { li.releasePointerCapture(e.pointerId); } catch (_) {}
+      document.removeEventListener('pointermove', onMove);
+      document.removeEventListener('pointerup', end);
+      document.removeEventListener('pointercancel', end);
       if (started) {
         // Rebuild the canonical order from the final DOM order.
         ballotOrder = [...$('#ballot').querySelectorAll('.rank-row')].map((n) => n.dataset.id);
@@ -1130,8 +1124,21 @@
       }
       started = false;
     };
-    li.addEventListener('pointerup', end);
-    li.addEventListener('pointercancel', end);
+
+    li.addEventListener('pointerdown', (e) => {
+      if (hasVotedLocally) return;
+      if (e.button != null && e.button !== 0) return;   // primary button only
+      // Let the arrow buttons receive their own taps.
+      if (e.target.closest('button')) return;
+      dragging = true;
+      started = false;
+      activePointer = e.pointerId;
+      startX = e.clientX;
+      startY = e.clientY;
+      document.addEventListener('pointermove', onMove);
+      document.addEventListener('pointerup', end);
+      document.addEventListener('pointercancel', end);
+    });
   }
 
   function moveBallot(idx, delta) {
