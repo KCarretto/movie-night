@@ -485,7 +485,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.6</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.7</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -721,6 +721,20 @@
   // punctuation so "Spider-Man" and "spider man" resolve to the same entry.
   const dbKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 
+  // Lookup key for a movie's embedding in window.EMBEDDINGS. Mirrors the Python
+  // build step (scripts/generate_embeddings.py): prefer an explicit `id`, else
+  // fall back to the punctuation-insensitive title key.
+  const embKey = (m) => (m && m.id != null && m.id !== '') ? String(m.id) : dbKey(m && m.title);
+
+  // Resolve a movie's static embedding vector, or null if embeddings.json
+  // hasn't loaded yet or this title has no vector.
+  function movieEmbedding(m) {
+    const lut = window.EMBEDDINGS;
+    if (!lut || !m) return null;
+    const v = lut[embKey(m)];
+    return Array.isArray(v) && v.length ? v : null;
+  }
+
   // ======================================================================
   //  MOVIE RECOMMENDATION DATABASE (movies.json, loaded once at startup)
   // ======================================================================
@@ -764,6 +778,28 @@
       console.warn('Could not load movies.json:', e);
     }
     indexMovieDb();
+    if (typeof renderAll === 'function') renderAll();
+    // Lazy-load the (much larger) embeddings map in the background so the UI is
+    // interactive immediately. Group-taste matching upgrades in once it arrives.
+    loadEmbeddings();
+  }
+
+  // Fetch embeddings.json after the catalogue is on screen and stash it in a
+  // global lookup keyed by movie id / normalised title. Failure is non-fatal:
+  // the engine simply falls back to neutral similarity scores.
+  async function loadEmbeddings() {
+    try {
+      const res = await fetch('embeddings.json', { cache: 'no-cache' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      window.EMBEDDINGS = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+    } catch (e) {
+      // Leave EMBEDDINGS undefined so the cosine helper keeps its 0.5 default.
+      console.warn('Could not load embeddings.json:', e);
+      return;
+    }
+    // Our own taste vector now resolves — recompute, re-share and re-render.
+    shareVector();
     if (typeof renderAll === 'function') renderAll();
   }
 
@@ -812,7 +848,19 @@
   }
   function shareSeen() {
     dispatch({ type: 'setSeen', seen: mySeenShare() });
+    shareVector();
     renderAll();
+  }
+
+  // My current taste vector (average embedding of movies I rated > 2.5), or null
+  // if I have no qualifying ratings or embeddings.json hasn't loaded yet.
+  function myTasteVector() {
+    try { return buildTasteProfile().userVector || null; }
+    catch (e) { return null; }
+  }
+  // Broadcast my taste vector to the room so peers can match the group's vibe.
+  function shareVector() {
+    dispatch({ type: 'setVector', vector: myTasteVector() });
   }
 
   // Gather everyone (by display name) who has seen a given title, with rating.
@@ -879,6 +927,7 @@
     votes: {},                   // peerId -> [movieId, movieId, ...] ranked
     results: null,               // computed instant-runoff result (set in results phase)
     seen: {},                    // peerId -> [{ title, rating }] watched-movie shares
+    peerVectors: {},             // peerId -> taste vector (avg embedding of liked movies)
   };
 
   // ======================================================================
@@ -939,6 +988,9 @@
       // Register the host's own watched movies into the shared seen map.
       if (state.seen) state.seen[id] = mySeenShare();
       else state.seen = { [id]: mySeenShare() };
+      // Seed the host's own taste vector for group matching (may be null until
+      // embeddings.json loads — it re-shares once that fetch completes).
+      shareVector();
       renderAll();
     });
 
@@ -982,6 +1034,9 @@
       safeSend(conn, { type: 'join', name: loadSavedName() });
       // Share which movies we've already watched so the room can flag them.
       safeSend(conn, { type: 'action', action: { type: 'setSeen', seen: mySeenShare() } });
+      // Share our taste vector for group-vibe matching (null until embeddings
+      // load; loadEmbeddings() re-broadcasts once it resolves).
+      safeSend(conn, { type: 'action', action: { type: 'setVector', vector: myTasteVector() } });
     });
   }
 
@@ -1091,6 +1146,7 @@
     state.peers = state.peers.filter((p) => p.id !== peerId);
     delete state.votes[peerId];
     if (state.seen) delete state.seen[peerId];
+    if (state.peerVectors) delete state.peerVectors[peerId];
     if (state.peers.length !== before) {
       broadcastDirectory();
       // If we were waiting on this peer's vote, results may now be ready.
@@ -1242,6 +1298,21 @@
           .filter((s) => s && typeof s.title === 'string')
           .slice(0, 500)
           .map((s) => ({ title: String(s.title).slice(0, 120), rating: Number(s.rating) || 0 }));
+        break;
+      }
+
+      case 'setVector': {
+        // A peer shares their taste vector (average embedding of their liked
+        // movies) so the room can score candidates against the whole group.
+        if (!state.peers.some((p) => p.id === fromId)) return;
+        if (!state.peerVectors) state.peerVectors = {};
+        const v = action.vector;
+        if (Array.isArray(v) && v.length && v.length <= 2048
+            && v.every((n) => typeof n === 'number' && isFinite(n))) {
+          state.peerVectors[fromId] = v.map((n) => Number(n));
+        } else {
+          delete state.peerVectors[fromId];
+        }
         break;
       }
     }
@@ -1842,8 +1913,7 @@
       director: 1.5,
       keyword:  0.8,
       quality:  1.0,
-      peer:     1.0,
-      embedding: 2.0,
+      groupEmbedding: 2.0,
     },
     // Minimum number of rated/nominated titles needed before switching to
     // personalised mode (below this we use cold-start).
@@ -1912,7 +1982,37 @@
     return dot / (Math.sqrt(magA) * Math.sqrt(magB));
   }
 
-  // ---------- taste profile ----------
+  // ---------- group-taste vibe ----------
+  // Cosine similarity used for group matching. When embeddings.json hasn't
+  // finished loading yet (or either vector is missing) we gracefully default to
+  // a neutral 0.5 so recommendations still rank sensibly in the meantime.
+  function vibeSimilarity(a, b) {
+    if (!window.EMBEDDINGS) return 0.5;
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || a.length === 0) {
+      return 0.5;
+    }
+    return cosineSimilarity(a, b);
+  }
+
+  // Average cosine similarity of a candidate's embedding against the whole room:
+  // the local user's taste vector plus every peer vector shared over WebRTC.
+  // Result is mapped from cosine [-1, 1] onto a clean [0, 1] scale.
+  function groupVibeScore(m, profile) {
+    const emb = movieEmbedding(m);
+    const sims = [];
+    if (Array.isArray(profile.userVector)) sims.push(vibeSimilarity(profile.userVector, emb));
+    const peerVectors = (state && state.peerVectors) || {};
+    Object.keys(peerVectors).forEach((pid) => {
+      if (pid === myId) return;                 // local taste is counted above
+      const v = peerVectors[pid];
+      if (Array.isArray(v) && v.length) sims.push(vibeSimilarity(v, emb));
+    });
+    // Nobody has a usable taste vector yet → neutral.
+    const groupCosineScore = sims.length
+      ? sims.reduce((s, x) => s + x, 0) / sims.length
+      : 0.5;
+    return (groupCosineScore + 1) / 2;          // [-1, 1] → [0, 1]
+  }
   // Build a multi-signal profile from watched+rated movies and past nominations.
   // Each signal is a Map<feature, weight> where positive = liked, negative = disliked.
   // Returns { genreWeights, actorWeights, directorWeights, keywordWeights,
@@ -1983,14 +2083,15 @@
     }
 
     // Build the user "taste vector": the average embedding of every movie the
-    // user rated above neutral (> 2.5). The browser later ranks candidates by
-    // cosine similarity to this vector.
+    // user rated above neutral (> 2.5), looked up in window.EMBEDDINGS. The
+    // browser later ranks candidates by cosine similarity to this vector and
+    // broadcasts it to the room for group-taste matching.
     let userVector = null;
     let vectorCount = 0;
     watched.forEach((wEntry) => {
       if (!((wEntry.rating || 0) > 2.5)) return;
       const meta = movieMeta(wEntry.title);
-      const emb = meta && meta.embedding;
+      const emb = meta && movieEmbedding(meta);
       if (!Array.isArray(emb) || emb.length === 0) return;
       if (!userVector) {
         userVector = emb.slice();
@@ -2028,32 +2129,12 @@
     const kw   = kws.reduce((s, k) => s + (profile.keywordWeights.get(k) || 0), 0) / (kws.length || 1);
     const qual = qualityScore(m);
 
-    // In-room collaborative filtering: nudge the score using how the *other*
-    // peers in the room have already reacted to this candidate.
-    let peerBonus = 0;
-    const seen = state.seen || {};
-    Object.keys(seen).forEach((pid) => {
-      if (pid === myId) return;                 // ignore my own seen list
-      const list = seen[pid];
-      if (!Array.isArray(list)) return;
-      const hit = list.find((s) => normTitle(s.title) === normTitle(m.title));
-      if (!hit) return;
-      const r = hit.rating || 0;
-      if (r >= 4) peerBonus += 0.5;             // a peer loved it
-      else if (r >= 1 && r <= 2) peerBonus -= 0.5; // a peer disliked it
-      else if (r === 0) peerBonus -= 0.2;       // watched but left unrated
-    });
-
-    // Embedding similarity: cosine between the user's taste vector and the
-    // candidate's embedding, remapped from [-1, 1] to [0, 1].
-    let cosineScore = 0;
-    if (Array.isArray(profile.userVector) && Array.isArray(m.embedding)) {
-      const sim = cosineSimilarity(profile.userVector, m.embedding);
-      cosineScore = (sim + 1) / 2;
-    }
+    // Group-taste collaborative filter: how well this candidate fits the whole
+    // room's combined vibe (local user + every peer taste vector), in [0, 1].
+    const groupCosineScore = groupVibeScore(m, profile);
 
     return w.genre * gen + w.actor * act + w.director * dir + w.keyword * kw
-         + w.quality * qual + w.peer * peerBonus + w.embedding * cosineScore;
+         + w.quality * qual + w.groupEmbedding * groupCosineScore;
   }
 
   // Cold-start score: quality + small recency boost; no personalisation.
@@ -2096,18 +2177,34 @@
     if (!MOVIE_DB.length) return [];
     const profile      = buildTasteProfile();
     const personalised = profile.hasSignal;
-    const watchedSet   = new Set(loadWatched().map((w) => normTitle(w.title)));
+    // "Seen It" filter: drop any title that ANY participant (local user or any
+    // peer) has already watched/seen, so the room only weighs movies that are
+    // fresh to 100% of the room.
+    const seenSet      = roomSeenTitles();
     const nominatedSet = new Set(state.movies.map((m) => normTitle(m.title)));
     const candidates   = [];
     for (const m of MOVIE_DB) {
       if (!m || !m.title || !m.art) continue;
       const nt = normTitle(m.title);
-      if (watchedSet.has(nt) || nominatedSet.has(nt)) continue;
+      if (seenSet.has(nt) || nominatedSet.has(nt)) continue;
       const score = personalised ? scoreCandidate(m, profile) : coldStartScore(m);
       candidates.push({ movie: m, score, isNew: isNewMovie(m), personalised });
     }
     candidates.sort((a, b) => b.score - a.score);
     return blendRecommendations(candidates, maxResults);
+  }
+
+  // Set of normalised titles seen by anyone in the room: the local user's
+  // watched list plus every peer's shared seen list.
+  function roomSeenTitles() {
+    const out = new Set();
+    loadWatched().forEach((w) => out.add(normTitle(w.title)));
+    const seen = (state && state.seen) || {};
+    Object.keys(seen).forEach((pid) => {
+      const list = seen[pid];
+      if (Array.isArray(list)) list.forEach((s) => s && s.title && out.add(normTitle(s.title)));
+    });
+    return out;
   }
 
   // Recommendations only change when the catalogue, the watched/rated list or the
@@ -2117,7 +2214,16 @@
     const w    = loadWatched().map((x) => normTitle(x.title) + ':' + (x.rating || 0)).join('|');
     const noms = state.movies.map((m) => normTitle(m.title)).join('|');
     const hist = loadHistory().length;
-    return MOVIE_DB.length + '#' + w + '#' + noms + '#' + hist;
+    // Group-taste inputs: peers' shared seen lists + their taste vectors, plus
+    // whether embeddings.json has finished loading. Changes here re-rank recs.
+    const seen = (state && state.seen) || {};
+    const seenSig = Object.keys(seen).sort().map((pid) =>
+      pid + ':' + (Array.isArray(seen[pid]) ? seen[pid].length : 0)).join('|');
+    const pv = (state && state.peerVectors) || {};
+    const pvSig = Object.keys(pv).sort().join('|');
+    const embReady = window.EMBEDDINGS ? '1' : '0';
+    return MOVIE_DB.length + '#' + w + '#' + noms + '#' + hist
+         + '#' + seenSig + '#' + pvSig + '#' + embReady;
   }
   function getRecommendations(options = {}) {
     const forceRefresh = !!options.forceRefresh;
