@@ -159,7 +159,7 @@
     .rec-track::-webkit-scrollbar { height: 6px; }
     .rec-track::-webkit-scrollbar-thumb { background: #2a3242; border-radius: 9999px; }
     .rec-card { scroll-snap-align: start; flex: 0 0 150px; width: 150px; background: #141821;
-      border: 1px solid #2a3242; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column;
+      border: 1px solid #2a3242; border-radius: 12px; overflow: visible; display: flex; flex-direction: column;
       cursor: pointer; transition: border-color .15s ease, transform .1s ease; }
     .rec-card:hover, .rec-card:focus-within { border-color: #7c5cff; }
     .rec-card:active { transform: translateY(1px); }
@@ -176,7 +176,7 @@
       font-size: 10px; line-height: 1.2; padding: 2px 6px; border-radius: 9999px;
       background: rgba(124,92,255,.14); color: #b9a7ff; border: 1px solid rgba(124,92,255,.28);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .rec-why-pop { position: absolute; left: 0; top: calc(100% + 6px); min-width: 180px;
+    .rec-why-pop { position: absolute; left: 0; bottom: calc(100% + 6px); min-width: 180px;
       max-width: 260px; z-index: 20; display: none; font-size: 11px; line-height: 1.35;
       color: #cbd5e1; padding: 8px 10px; white-space: normal; }
     .rec-why-wrap:hover .rec-why-pop, .rec-why-wrap:focus-within .rec-why-pop, .rec-why-wrap.open .rec-why-pop { display: block; }
@@ -2536,7 +2536,7 @@
     ];
     drivers.sort((a, b) => b.val - a.val);
     let why;
-    if (drivers[0].key === 'fav' && bestFav) why = '🍿 Because you liked ' + bestFav.title;
+    if (drivers[0].key === 'fav' && bestFav) why = '🍿 ' + bestFav.title;
     else if (drivers[0].key === 'genre' && gen > 0) why = '✨ Fits your genre tastes';
     else why = '👥 Matches group vibe';
 
@@ -2771,16 +2771,16 @@
       : '';
     return `
       <div class="rec-card" role="listitem" data-title="${safeTitle}" tabindex="0" aria-label="View details for ${safeTitle}">
-        <div class="relative">
+        <div class="relative overflow-hidden rounded-t-xl">
           ${posterHtml(m, 'rec-poster')}
           ${rec.isNew ? '<span class="rec-badge">NEW</span>' : ''}
         </div>
         <div class="p-2 flex flex-col gap-1 flex-1">
           <div class="rec-title text-xs font-medium leading-snug">${safeTitle}${m.year ? ` <span class="text-slate-500">(${escapeHtml(String(m.year))})</span>` : ''}</div>
-          ${why}
           <div class="mt-auto space-y-1">
             ${seen || lang ? `<div class="flex items-center gap-1 flex-wrap text-[11px]">${seen}${lang}</div>` : ''}
             ${ratings ? `<div class="text-[10px] text-slate-400 truncate">${ratings}</div>` : ''}
+            ${why}
             <button class="rec-nominate btn w-full text-xs font-semibold py-1.5 rounded-lg ${canNominate ? 'btn-primary text-white' : 'opacity-40 cursor-not-allowed'}"
                     data-title="${safeTitle}" ${canNominate ? '' : 'disabled'}>
               <i class="fa-solid fa-plus mr-1"></i>Nominate
