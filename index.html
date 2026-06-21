@@ -648,6 +648,9 @@
         <button id="trainAddWatchlist" class="btn btn-primary text-white text-sm font-semibold py-2.5 rounded-lg">
           <i class="fa-regular fa-bookmark mr-1"></i>Add to Watchlist
         </button>
+        <button id="trainNotSure" class="btn text-sm font-semibold py-2.5 rounded-lg bg-panel2 border border-line text-slate-300 col-span-2">
+          <i class="fa-regular fa-circle-question mr-1"></i>I'm not sure
+        </button>
       </div>
       <p id="trainEmpty" class="hidden text-sm text-slate-500 italic">No more movies to train on right now — come back after rating a few.</p>
     </div>
@@ -1038,6 +1041,7 @@
   const WATCHLIST_KEY = 'movieNightWatchlist';
   const INTERESTED_KEY = 'movieNightInterested';
   const NOT_INTERESTED_KEY = 'movieNightNotInterested';
+  const NOT_SURE_KEY = 'movieNightNotSure';
 
   function loadJson(key, fallback) {
     try { const v = JSON.parse(localStorage.getItem(key) || 'null'); return v == null ? fallback : v; }
@@ -1139,6 +1143,21 @@
     if (!list.some((w) => normTitle(w.title) === normTitle(clean))) {
       list.push({ title: clean, at: Date.now() });
       saveNotInterested(list);
+    }
+    afterTasteChange();
+  }
+
+  // I'm not sure: [{ title, at }] — titles the user skipped with "I'm not sure" in training.
+  // Hides the title from the training flow only.
+  function loadNotSure() { const v = loadJson(NOT_SURE_KEY, []); return Array.isArray(v) ? v : []; }
+  function saveNotSure(list) { saveJson(NOT_SURE_KEY, list); }
+  function markNotSure(title) {
+    const clean = String(title || '').trim();
+    if (!clean) return;
+    const list = loadNotSure();
+    if (!list.some((w) => normTitle(w.title) === normTitle(clean))) {
+      list.push({ title: clean, at: Date.now() });
+      saveNotSure(list);
     }
     afterTasteChange();
   }
@@ -2998,6 +3017,7 @@
       ...loadWatchlist().map((x) => normTitle(x.title)),
       ...loadInterested().map((x) => normTitle(x.title)),
       ...loadNotInterested().map((x) => normTitle(x.title)),
+      ...loadNotSure().map((x) => normTitle(x.title)),
     ]);
     const ranked = computeRecommendations(Math.max(60, REC_CONFIG.maxResults * 3));
     return ranked.map((r) => r.movie).filter((m) => m && !acted.has(normTitle(m.title)));
@@ -3180,6 +3200,12 @@
     if (addWatchlist) addWatchlist.addEventListener('click', () => {
       if (!trainCurrent) return;
       addToWatchlist(trainCurrent.title);
+      trainNext();
+    });
+    const notSure = $('#trainNotSure');
+    if (notSure) notSure.addEventListener('click', () => {
+      if (!trainCurrent) return;
+      markNotSure(trainCurrent.title);
       trainNext();
     });
     const cancelRate = $('#trainRateCancel');
@@ -3881,6 +3907,7 @@
     localStorage.removeItem(WATCHLIST_KEY);
     localStorage.removeItem(INTERESTED_KEY);
     localStorage.removeItem(NOT_INTERESTED_KEY);
+    localStorage.removeItem(NOT_SURE_KEY);
     trainQueue = [];
     trainCurrent = null;
     trainPrerenderedCardHtml = null;
@@ -3897,6 +3924,7 @@
     localStorage.removeItem(WATCHLIST_KEY);
     localStorage.removeItem(INTERESTED_KEY);
     localStorage.removeItem(NOT_INTERESTED_KEY);
+    localStorage.removeItem(NOT_SURE_KEY);
     try { sessionStorage.removeItem(HOST_ROOM_KEY); } catch (e) {}
     try { sessionStorage.removeItem(REC_SESSION_SEEN_KEY); } catch (e) {}
     window.location.reload();
