@@ -1,0 +1,74 @@
+name: Sync movie catalogue
+
+# Refreshes movies.json from TMDB (+ OMDb) at build time and commits the result.
+# Runs twice a day, or on demand from the Actions tab. Each run:
+#   1. Downloads TMDB's daily id export (movie_ids_MM_DD_YYYY.json.gz) and unzips
+#      it. A failed download is non-fatal — the sync continues without it.
+#   2. Runs scripts/sync.py to import any ids from that export *and* discover
+#      500 pages of TMDB movies.
+#   3. Commits and pushes the updated movies.json to the main branch.
+#
+# Requires repository secrets:
+#   TMDB_API_KEY  (required) — https://www.themoviedb.org/settings/api
+#   OMDB_API_KEY  (optional) — https://www.omdbapi.com/apikey.aspx
+on:
+  workflow_dispatch:
+    inputs:
+      pages:
+        description: "TMDB pages to pull per list (20 movies/page)"
+        required: false
+        default: "500"
+  schedule:
+    # Twice a day: 10:00 UTC and 22:00 UTC.
+    - cron: "0 10 * * *"
+    - cron: "0 22 * * *"
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download TMDB daily id export
+        run: |
+          IDS_FILE="movie_ids_$(date -u +%m_%d_%Y).json"
+          echo "IDS_FILE=$IDS_FILE" >> "$GITHUB_ENV"
+          URL="https://files.tmdb.org/p/exports/${IDS_FILE}.gz"
+          echo "Fetching $URL"
+          # A failed download is non-fatal: continue with discovery only.
+          if curl -fsSL "$URL" -o "${IDS_FILE}.gz"; then
+            gunzip -f "${IDS_FILE}.gz" && echo "Downloaded and unzipped $IDS_FILE"
+          else
+            echo "Could not download ${IDS_FILE}.gz — continuing without it."
+            rm -f "${IDS_FILE}.gz"
+          fi
+
+      - name: Sync movies.json
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
+        run: |
+          python3 scripts/sync.py \
+            --pages "${{ github.event.inputs.pages || '500' }}" \
+            --ids-file "$IDS_FILE"
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- movies.json; then
+            echo "movies.json unchanged — nothing to commit."
+          else
+            git add movies.json
+            git commit -m "chore: sync movies.json from TMDB/OMDb"
+            git push origin HEAD:main
+          fi

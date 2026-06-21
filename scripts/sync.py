@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build-time generator for ``movies.json``, the Movie Night recommendation DB.
+"""Build-time sync for ``movies.json``, the Movie Night recommendation DB.
 
 Why a build step instead of a runtime API?
 ------------------------------------------
@@ -13,8 +13,8 @@ stays key-free and serverless.
 Data sources
 ------------
 * **TMDB** (https://www.themoviedb.org) — catalogue, posters, genres, overview,
-  release year, IMDb id and an audience vote average. Requires ``TMDB_API_KEY``
-  (a v3 API key or a v4 bearer token).
+  release year, primary language, IMDb id and an audience vote average. Requires
+  ``TMDB_API_KEY`` (a v3 API key or a v4 bearer token).
 * **OMDb** (https://www.omdbapi.com) — *optional*, used to enrich each title
   with a real Rotten Tomatoes percentage and IMDb /10 rating. Requires
   ``OMDB_API_KEY``. Skipped automatically when the key is absent.
@@ -23,24 +23,32 @@ Letterboxd has no public API, so the Letterboxd average is estimated from the
 TMDB vote average (``vote_average / 2``, rounded to one decimal). The estimate
 is clearly flagged in the output ``comment`` field.
 
+Movies are discovered two ways: by paging through TMDB's curated lists
+(``--pages``) and by importing TMDB's daily id export (``--ids-file``, the
+newline-delimited ``movie_ids_MM_DD_YYYY.json`` available from
+https://files.tmdb.org/p/exports/). Each movie records its ``tmdb_id`` so later
+runs skip ids already downloaded (unless ``--refresh`` is given).
+
 Usage
 -----
     export TMDB_API_KEY=xxxxxxxx        # required
     export OMDB_API_KEY=yyyyyyyy        # optional, for RT + IMDb ratings
-    python3 scripts/generate_movies.py --pages 25 --output movies.json
+    python3 scripts/sync.py --pages 25 --output movies.json
 
 ``--pages 25`` pulls roughly 1,000 movies (TMDB returns 20 per page). TMDB caps
 its lists at 500 pages, so larger values are clamped automatically. Downloads
 are rate-limited (``--pause`` seconds between requests) and show a live progress
 spinner. By default the script resumes from any existing ``--output`` file and
 only downloads movies it doesn't already have (use ``--refresh`` to rebuild from
-scratch). The script only uses the Python standard library, so there is nothing
-to install.
+scratch). ``--ids-file`` defaults to today's ``movie_ids_MM_DD_YYYY.json`` and is
+silently ignored when the file is absent. The script only uses the Python
+standard library, so there is nothing to install.
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
 import json
 import os
 import sys
@@ -195,11 +203,14 @@ def build_movie(
         return None
 
     vote_average = detail.get("vote_average")
-    return {
+    movie: Dict[str, Any] = {
         "title": title,
         "year": year_from_date(detail.get("release_date")),
         "primaryGenre": genres[0],
         "genres": genres,
+        # Primary spoken language as an ISO 639-1 code (e.g. "en", "fr", "ja").
+        # Used by the app to flag non-English films with a country-flag badge.
+        "language": (detail.get("original_language") or "").strip() or None,
         "description": (detail.get("overview") or "").strip(),
         "art": poster_url(detail.get("poster_path")),
         "ratings": {
@@ -208,6 +219,11 @@ def build_movie(
             "imdb": parse_imdb_rating(omdb, vote_average),
         },
     }
+    # Keep the TMDB id so future runs can skip movies already downloaded.
+    tmdb_id = detail.get("id")
+    if isinstance(tmdb_id, int):
+        movie["tmdb_id"] = tmdb_id
+    return movie
 
 
 def dedupe_movies(movies: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -341,6 +357,7 @@ def generate(
     omdb_key: str,
     pause: float = 0.25,
     existing: Optional[List[Dict[str, Any]]] = None,
+    extra_ids: Optional[Iterable[int]] = None,
 ) -> Dict[str, Any]:
     if pages > TMDB_MAX_PAGE:
         print(
@@ -356,10 +373,31 @@ def generate(
     candidates = collect_movies_to_fetch(client, pages, discover)
     discover.done(suffix=f"{len(candidates)} candidates")
 
+    # Fold in any ids supplied via --ids-file (the TMDB daily export). These
+    # have no title yet, so they're carried as ``(id, "")`` and de-duplicated
+    # against the ids already discovered above.
+    if extra_ids:
+        discovered_ids = {mid for (mid, _title) in candidates}
+        added = 0
+        for mid in extra_ids:
+            if mid not in discovered_ids:
+                discovered_ids.add(mid)
+                candidates.append((mid, ""))
+                added += 1
+        if added:
+            print(f"Added {added} movie id(s) from --ids-file.", file=sys.stderr)
+
     # Resume support: keep movies we already have and only download the new ones.
+    # Skip by TMDB id when known (covers ids-file entries with no title yet) and
+    # fall back to a normalized title match for legacy records without an id.
     existing = existing or []
-    known = {title_key(m.get("title", "")) for m in existing if m.get("title")}
-    pending = [(mid, title) for (mid, title) in candidates if title_key(title) not in known]
+    known_ids = {m.get("tmdb_id") for m in existing if isinstance(m.get("tmdb_id"), int)}
+    known_titles = {title_key(m.get("title", "")) for m in existing if m.get("title")}
+    pending = [
+        (mid, title)
+        for (mid, title) in candidates
+        if mid not in known_ids and (not title or title_key(title) not in known_titles)
+    ]
     skipped = len(candidates) - len(pending)
     if skipped:
         print(f"Skipping {skipped} movie(s) already in the catalogue.", file=sys.stderr)
@@ -395,6 +433,44 @@ def load_existing(path: str) -> List[Dict[str, Any]]:
     return [m for m in movies if isinstance(m, dict) and m.get("title")]
 
 
+def default_ids_filename(today: Optional[datetime.date] = None) -> str:
+    """The TMDB daily export filename for ``today`` (``movie_ids_MM_DD_YYYY.json``)."""
+    today = today or datetime.date.today()
+    return today.strftime("movie_ids_%m_%d_%Y.json")
+
+
+def load_ids_file(path: str) -> List[int]:
+    """Read TMDB movie ids from a daily export file.
+
+    The TMDB export (https://files.tmdb.org/p/exports/) is *newline-delimited*
+    JSON — one object per line, e.g.::
+
+        {"adult":false,"id":3924,"original_title":"Blondie","popularity":0.48}
+
+    Missing files are not an error: an empty list is returned so the caller can
+    continue with discovery only. Malformed lines are skipped individually.
+    """
+    ids: List[int] = []
+    seen = set()
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            for line in handle:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    obj = json.loads(line)
+                except ValueError:
+                    continue
+                movie_id = obj.get("id") if isinstance(obj, dict) else None
+                if isinstance(movie_id, int) and movie_id not in seen:
+                    seen.add(movie_id)
+                    ids.append(movie_id)
+    except OSError:
+        return []
+    return ids
+
+
 def wrap_output(movies: List[Dict[str, Any]], used_omdb: bool) -> Dict[str, Any]:
     rt_note = (
         "rottenTomatoes is the Rotten Tomatoes Tomatometer percentage from OMDb"
@@ -403,9 +479,10 @@ def wrap_output(movies: List[Dict[str, Any]], used_omdb: bool) -> Dict[str, Any]
     )
     return {
         "comment": (
-            "Auto-generated by scripts/generate_movies.py. "
+            "Auto-generated by scripts/sync.py. "
             "letterboxd is an estimate (TMDB vote average / 2, out of 5); "
             f"{rt_note}; imdb is out of 10. "
+            "language is the primary (original) language ISO 639-1 code. "
             "art is a TMDB poster URL with an in-app fallback if it fails to load."
         ),
         "movies": movies,
@@ -413,7 +490,7 @@ def wrap_output(movies: List[Dict[str, Any]], used_omdb: bool) -> Dict[str, Any]
 
 
 def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Generate movies.json for Movie Night.")
+    parser = argparse.ArgumentParser(description="Sync movies.json for Movie Night.")
     parser.add_argument(
         "--pages",
         type=int,
@@ -424,6 +501,12 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--output",
         default=os.path.join(os.path.dirname(os.path.dirname(__file__)), "movies.json"),
         help="Path to write the JSON catalogue. Default: <repo>/movies.json.",
+    )
+    parser.add_argument(
+        "--ids-file",
+        default=default_ids_filename(),
+        help="TMDB daily export of movie ids (newline-delimited JSON) to import. "
+        "Default: movie_ids_MM_DD_YYYY.json for today. Missing files are ignored.",
     )
     parser.add_argument(
         "--pause",
@@ -466,7 +549,13 @@ def main(argv: Optional[List[str]] = None) -> int:
     if existing:
         print(f"Resuming from {len(existing)} movie(s) in {args.output}.", file=sys.stderr)
 
-    payload = generate(args.pages, tmdb_key, omdb_key, args.pause, existing)
+    ids = load_ids_file(args.ids_file)
+    if ids:
+        print(f"Loaded {len(ids)} movie id(s) from {args.ids_file}.", file=sys.stderr)
+    else:
+        print(f"No ids imported from {args.ids_file} (missing or empty).", file=sys.stderr)
+
+    payload = generate(args.pages, tmdb_key, omdb_key, args.pause, existing, ids)
     with open(args.output, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
