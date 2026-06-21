@@ -273,9 +273,7 @@
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
     Serverless P2P over WebRTC · No data leaves your devices except signaling.
-    <div class="mt-1">
-      <a id="versionLink" href="https://github.com/KCarretto/movie-night/commits" target="_blank" rel="noopener noreferrer" class="text-slate-500 hover:text-slate-300">version: loading…</a>
-    </div>
+    <div class="mt-1">version 1</div>
   </footer>
 
   <!-- ===================== START-VOTING CONFIRM MODAL ===================== -->
@@ -1474,26 +1472,6 @@
 
   // ============================== GO! ==============================
   window.addEventListener('load', boot);
-
-  // ============================== VERSION ==============================
-  // Display the current deployed commit hash. Since this is a build-step-free
-  // static site, fetch the latest commit for the repo from the GitHub API.
-  (function showVersion() {
-    const link = document.getElementById('versionLink');
-    if (!link) return;
-    fetch('https://api.github.com/repos/KCarretto/movie-night/commits?per_page=1', {
-      headers: { 'Accept': 'application/vnd.github+json' }
-    })
-      .then(r => (r.ok ? r.json() : Promise.reject(new Error('HTTP ' + r.status))))
-      .then(commits => {
-        const sha = Array.isArray(commits) && commits[0] && commits[0].sha;
-        if (!sha) throw new Error('no commit');
-        const short = sha.slice(0, 7);
-        link.textContent = 'version: ' + short;
-        link.href = 'https://github.com/KCarretto/movie-night/commit/' + sha;
-      })
-      .catch(() => { link.textContent = 'version: unknown'; });
-  })();
   </script>
 </body>
 </html>
