@@ -275,7 +275,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.3</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.4</b>
   </footer>
 
   <!-- ===================== START-VOTING CONFIRM MODAL ===================== -->
@@ -318,10 +318,10 @@
   const MAX_NAME_LEN = 24;      // display-name character cap
 
   // ---- Fun movie-themed room codes ----------------------------------------
-  // Room codes read like a little movie tagline: <adjective>-<noun>-<NN>,
-  // e.g. "epic-popcorn-42". Lowercase words are joined by hyphens (never
-  // spaces). With 50 adjectives x 50 nouns x 100 numbers there are 250,000
-  // possible combinations (well over the 100,000 minimum).
+  // Room codes read like a whimsical little movie tagline: <adjective>-<noun>,
+  // e.g. "moonlit-popcorn". Lowercase words are joined by a hyphen (never
+  // spaces). With 80 adjectives x 80 nouns there are 6,400 possible
+  // combinations of delightfully silly, cinematic phrases.
   const ROOM_ADJECTIVES = [
     'epic', 'silent', 'classic', 'noir', 'technicolor', 'blockbuster', 'indie',
     'animated', 'cult', 'golden', 'dramatic', 'comic', 'action', 'vintage',
@@ -330,7 +330,11 @@
     'romantic', 'thrilling', 'suspenseful', 'musical', 'western', 'futuristic', 'heroic',
     'mysterious', 'whimsical', 'dazzling', 'breezy', 'campy', 'glossy', 'moody',
     'snappy', 'sparkly', 'twisty', 'velvet', 'silver', 'midnight', 'sunny',
-    'cozy', 'electric',
+    'cozy', 'electric', 'bumbling', 'giggly', 'fizzy', 'wobbly', 'snuggly',
+    'bouncy', 'jolly', 'dapper', 'fuzzy', 'twinkly', 'sneaky', 'cuddly',
+    'zany', 'goofy', 'bubbly', 'plucky', 'wiggly', 'spiffy', 'nifty',
+    'quirky', 'peppy', 'jaunty', 'frolicsome', 'moonlit', 'enchanted',
+    'marvelous', 'flickering', 'gilded', 'rascally', 'swashbuckling', 'chipper',
   ];
   const ROOM_NOUNS = [
     'popcorn', 'reel', 'director', 'marquee', 'trailer', 'cameo', 'sequel',
@@ -340,14 +344,19 @@
     'cinema', 'theater', 'auteur', 'gaffer', 'stuntman', 'sidekick', 'villain',
     'protagonist', 'closeups', 'storyboard', 'flashback', 'epilogue', 'prologue',
     'intermission', 'lobbycard', 'boxoffice', 'nickelodeon', 'newsreel', 'overture',
-    'encore', 'clapboard', 'dolly', 'boommic', 'genre',
+    'encore', 'clapboard', 'dolly', 'boommic', 'genre', 'popcornpot', 'snackbar',
+    'jujube', 'gumdrop', 'sodapop', 'nachos', 'velvetrope', 'doubledecker',
+    'understudy', 'matineemouse', 'ushergnome', 'reeldragon', 'plotbunny',
+    'twistending', 'cameokitten', 'dreamsequence', 'creditcookie', 'easteregg',
+    'megaphone', 'spotlightowl', 'popcornpenguin', 'curtaincall', 'standin',
+    'wranglergoose', 'bestboy', 'foleyfox', 'matineemoth', 'redcarpet',
+    'silverscreen', 'doublefeature', 'jumpscare', 'plottwist',
   ];
 
-  // Pick a fun, movie-themed room code: adjective-noun-NN.
+  // Pick a whimsical, movie-themed room code: adjective-noun.
   function randomRoomId() {
     const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
-    const num = String(Math.floor(Math.random() * 100)).padStart(2, '0');
-    return `${pick(ROOM_ADJECTIVES)}-${pick(ROOM_NOUNS)}-${num}`;
+    return `${pick(ROOM_ADJECTIVES)}-${pick(ROOM_NOUNS)}`;
   }
 
   // Normalize a room code from a URL / QR / saved value into the canonical
