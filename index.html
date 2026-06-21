@@ -49,6 +49,12 @@
         radial-gradient(1200px 600px at 20% -10%, rgba(124,92,255,.18), transparent 60%),
         radial-gradient(1000px 500px at 100% 0%, rgba(255,61,110,.16), transparent 55%),
         #0b0d12;
+      /* Pin the gradient to the viewport and never repeat it, so the backdrop
+         stays one seamless wash on tall pages (e.g. the results screen) instead
+         of tiling/banding as you scroll. */
+      background-repeat: no-repeat;
+      background-attachment: fixed;
+      background-size: cover;
       -webkit-tap-highlight-color: transparent;
     }
     .font-display { font-family: 'Bebas Neue', system-ui, sans-serif; letter-spacing: .03em; }
@@ -174,6 +180,9 @@
           <input id="nameInput" maxlength="24" autocomplete="off"
                  placeholder="Pick a name…"
                  class="flex-1 min-w-0 bg-ink border border-line rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent2" />
+          <button id="randomNameBtn" type="button" title="Roll a random name"
+                  aria-label="Roll a random name"
+                  class="btn bg-panel2 border border-line text-base px-3 py-2 rounded-lg leading-none">🎲</button>
           <button id="saveNameBtn" type="submit" class="btn btn-accent2 text-white text-sm font-semibold px-3 py-2 rounded-lg">Save</button>
         </form>
         <p id="nameMsg" class="text-xs text-slate-500 mt-1 h-4"></p>
@@ -233,6 +242,10 @@
         <p id="emptyMovies" class="text-sm text-slate-500 italic">No movies yet — be the first to nominate!</p>
       </div>
 
+      <!-- Host-only readiness indicator: shows how many participants have used
+           all of their nominations so the host knows when everyone is done. -->
+      <div id="readyIndicator" class="hidden text-center text-sm rounded-lg px-3 py-2 border border-line bg-ink text-slate-300"></div>
+
       <!-- Host-only control to advance the whole room to voting. -->
       <button id="lockBtn" class="hidden btn btn-accent2 text-white font-semibold w-full py-3 rounded-xl">
         🔒 Lock Nominations & Start Voting
@@ -267,6 +280,11 @@
 
       <div>
         <div class="text-[11px] uppercase tracking-wider text-slate-400 mb-2">Instant-Runoff Rounds</div>
+        <p class="text-[11px] text-slate-500 mb-2">
+          Each round the lowest choice is eliminated and its ballots transfer to their next pick.
+          Ties for last are broken in order: 1) fewest genuine 1st-choice votes,
+          2) lowest overall ranking score, then 3) a deterministic alphabetical fallback.
+        </p>
         <div id="rounds" class="space-y-3"></div>
       </div>
 
@@ -275,7 +293,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.4</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.5</b>
   </footer>
 
   <!-- ===================== START-VOTING CONFIRM MODAL ===================== -->
@@ -910,32 +928,47 @@
       // redistribute that candidate's ballots correctly.
       const lowest = entries[entries.length - 1][1];
       let losers = entries.filter(([, n]) => n === lowest).map(([id]) => id);
+      const tiedForLast = losers.length;   // how many shared the lowest tally
+      let tieBreak = null;                  // which tie-breaker settled the tie
       if (losers.length > 1) {
         // Tiebreaker 1 (Look-Back): keep only candidates with the lowest
         // genuine first-preference tally.
         const minTally = Math.min(...losers.map((id) => firstRoundTally[id]));
-        losers = losers.filter((id) => firstRoundTally[id] === minTally);
+        const filtered = losers.filter((id) => firstRoundTally[id] === minTally);
+        if (filtered.length < losers.length) {
+          tieBreak = `Tie-breaker 1 (fewest genuine 1st-choice votes, ${minTally}) decided it.`;
+        }
+        losers = filtered;
       }
       if (losers.length > 1) {
         // Tiebreaker 2 (Weighted Score): keep only candidates with the lowest
         // Borda-style weighted score.
         const minScore = Math.min(...losers.map((id) => weightedScore[id]));
-        losers = losers.filter((id) => weightedScore[id] === minScore);
+        const filtered = losers.filter((id) => weightedScore[id] === minScore);
+        if (filtered.length < losers.length) {
+          tieBreak = `Tie-breaker 2 (lowest overall ranking score, ${minScore}) decided it.`;
+        }
+        losers = filtered;
       }
       if (losers.length > 1) {
         // Tiebreaker 3 (Deterministic Fallback): break any remaining perfect tie
         // by sorting alphabetically by movie ID so results stay predictable.
         losers.sort((a, b) => String(a).localeCompare(String(b)));
+        tieBreak = 'Tie-breaker 3 (deterministic alphabetical fallback) decided the remaining exact tie.';
       }
       // Enforce single elimination: only the single worst-performing candidate.
       losers = [losers[0]];
       losers.forEach((id) => remaining.delete(id));
       roundInfo.eliminated = losers.map((id) => ({ id, title: titleOf(id) }));
+      roundInfo.tieBreak = tieBreak;   // null when there was no tie to break
       const loserTitles = losers.map((id) => titleOf(id)).join(', ');
       roundInfo.eliminationReason =
         `No choice reached a majority (${needToWin} of ${counted} needed). ` +
         `Eliminated ${loserTitles} with the fewest votes (${lowest}); ` +
-        `those ballots now transfer to their next still-standing pick.`;
+        `those ballots now transfer to their next still-standing pick.` +
+        (tiedForLast > 1
+          ? ` ${tiedForLast} choices were tied on ${lowest} vote${lowest === 1 ? '' : 's'} for last — ${tieBreak}`
+          : '');
       rounds.push(roundInfo);
     }
 
@@ -1020,6 +1053,33 @@
       lockBtn.classList.toggle('opacity-40', !ready);
       lockBtn.classList.toggle('cursor-not-allowed', !ready);
     }
+
+    renderReadyIndicator();
+  }
+
+  // Host-only: report how many participants have used up all of their movie
+  // nominations, so the host can tell at a glance when everyone is finished.
+  function renderReadyIndicator() {
+    const box = $('#readyIndicator');
+    if (!box) return;
+    const show = isHost && state.phase === 'lobby';
+    box.classList.toggle('hidden', !show);
+    if (!show) return;
+
+    const total = state.peers.length;
+    const counts = (id) => state.movies.filter((m) => m.by === id).length;
+    const finished = state.peers.filter((p) => counts(p.id) >= MAX_NOMINATIONS).length;
+    const everyone = total > 0 && finished === total;
+
+    box.textContent = everyone
+      ? `✅ Everyone's ready — all ${total} ${total === 1 ? 'player has' : 'players have'} added their movies.`
+      : `⏳ ${finished} of ${total} ${total === 1 ? 'player' : 'players'} finished adding movies…`;
+    box.classList.toggle('border-emerald-500/50', everyone);
+    box.classList.toggle('bg-emerald-500/10', everyone);
+    box.classList.toggle('text-emerald-300', everyone);
+    box.classList.toggle('border-line', !everyone);
+    box.classList.toggle('bg-ink', !everyone);
+    box.classList.toggle('text-slate-300', !everyone);
   }
 
   function renderMovies() {
@@ -1491,6 +1551,18 @@
     // Click-away closes the settings menu.
     document.addEventListener('click', (e) => {
       if (!$('#settingsWrap').contains(e.target)) closeSettingsMenu();
+    });
+
+    // Roll a fresh auto-generated nickname into the name field (same style as
+    // the default placeholder names), avoiding names already taken by peers.
+    $('#randomNameBtn').addEventListener('click', () => {
+      const taken = state.peers
+        .filter((p) => p.id !== myId)
+        .map((p) => p.name);
+      const input = $('#nameInput');
+      if (!input) return;
+      input.value = pickNickname(taken);
+      input.focus();
     });
 
     // Set / change my display name (persisted in local storage).
