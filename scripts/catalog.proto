@@ -62,6 +62,10 @@ message Movie {
 
   repeated string director = 13;
   repeated string cast = 14;
+
+  // Popularity footprint used to filter obscure titles out of recommendations.
+  uint32 vote_count = 15;             // Number of TMDB user votes
+  float popularity = 16;              // TMDB popularity score
 }
 
 message MovieCatalog {

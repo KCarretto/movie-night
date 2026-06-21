@@ -360,6 +360,28 @@
           </button>
         </div>
       </div>
+      <!-- Multi-select mood filters: narrow the carousel by one or more genres
+           and/or original languages (OR within each group). -->
+      <div id="recFilters" class="flex flex-wrap items-center gap-2">
+        <div id="genreFilterWrap" class="relative">
+          <button id="genreFilterBtn" type="button" aria-haspopup="true" aria-expanded="false"
+                  class="btn bg-panel2 border border-line text-xs font-semibold px-2.5 py-1.5 rounded-lg inline-flex items-center">
+            <i class="fa-solid fa-masks-theater mr-1.5"></i><span id="genreFilterLabel">All genres</span>
+            <i class="fa-solid fa-chevron-down ml-1.5 text-[10px]"></i>
+          </button>
+          <div id="genreFilterMenu" role="menu" aria-label="Filter by genre"
+               class="hidden absolute z-30 left-0 mt-1 card p-2 w-52 max-h-64 overflow-auto space-y-0.5"></div>
+        </div>
+        <div id="langFilterWrap" class="relative">
+          <button id="langFilterBtn" type="button" aria-haspopup="true" aria-expanded="false"
+                  class="btn bg-panel2 border border-line text-xs font-semibold px-2.5 py-1.5 rounded-lg inline-flex items-center">
+            <i class="fa-solid fa-language mr-1.5"></i><span id="langFilterLabel">All languages</span>
+            <i class="fa-solid fa-chevron-down ml-1.5 text-[10px]"></i>
+          </button>
+          <div id="langFilterMenu" role="menu" aria-label="Filter by language"
+               class="hidden absolute z-30 left-0 mt-1 card p-2 w-52 max-h-64 overflow-auto space-y-0.5"></div>
+        </div>
+      </div>
       <div class="relative">
         <button id="recPrev" type="button" class="rec-nav rec-prev" aria-label="Scroll recommendations left">
           <i class="fa-solid fa-chevron-left"></i>
@@ -531,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 7</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 8</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -895,6 +917,8 @@
         vIdx:                 { type: 'uint32', id: 12 },
         director:             { rule: 'repeated', type: 'string', id: 13 },
         cast:                 { rule: 'repeated', type: 'string', id: 14 },
+        voteCount:            { type: 'uint32', id: 15 },
+        popularity:           { type: 'float',  id: 16 },
       } },
       MovieCatalog: { fields: {
         movies: { rule: 'repeated', type: 'Movie', id: 1 },
@@ -928,6 +952,9 @@
       vIdx: (m.vIdx != null ? m.vIdx : null),
       cast: (m.cast && m.cast.length) ? m.cast : undefined,
       director: (m.director && m.director.length) ? m.director : undefined,
+      // Popularity footprint used to dampen/discard obscure recommendations.
+      voteCount: m.voteCount || 0,
+      popularity: m.popularity || 0,
     };
   }
 
@@ -2241,10 +2268,15 @@
       genre:    1.2,
       actor:    1.0,
       director: 1.5,
-      keyword:  0.8,
+      keyword:  0.25,
       quality:  1.0,
       groupEmbedding: 2.0,
     },
+    // Popularity floor: candidates below these TMDB footprints are treated as
+    // too obscure to recommend. Legacy catalogue entries that predate the
+    // popularity fields (voteCount === 0) are exempt until backfilled.
+    minVoteCount:  150,
+    minPopularity: 2.0,
     // Minimum number of rated/nominated titles needed before switching to
     // personalised mode (below this we use cold-start).
     personaliseThreshold: 3,
@@ -2263,6 +2295,17 @@
   };
 
   const isNewMovie = (m) => !!(m && m.year && m.year >= REC_CONFIG.newSinceYear);
+
+  // True when a candidate is too obscure to recommend (below the TMDB
+  // popularity floor). Legacy entries that predate the popularity fields
+  // (voteCount === 0) are exempt so they aren't all discarded before the sync
+  // backfill populates them.
+  const isObscureMovie = (m) => {
+    const votes = m && m.voteCount ? m.voteCount : 0;
+    if (votes <= 0) return false;   // unknown footprint → don't filter
+    const pop = m && m.popularity ? m.popularity : 0;
+    return votes < REC_CONFIG.minVoteCount || pop < REC_CONFIG.minPopularity;
+  };
 
   const movieGenres = (m) =>
     (m && m.genres && m.genres.length ? m.genres : (m && m.primaryGenre ? [m.primaryGenre] : []));
@@ -2524,6 +2567,9 @@
   // perfectly match the viewer's taste are never unfairly buried.
   function scoreCandidate(m, profile) {
     const w   = REC_CONFIG.weights;
+    // Discard obscure candidates (too few votes / too low popularity) so the
+    // feed surfaces films people have actually heard of.
+    if (isObscureMovie(m)) return -Infinity;
     // Metadata features are dampened by the *square root* of each feature list's
     // length (rather than its raw length) so that movies with long genre/cast
     // lists don't dilute explicit user-affinity signals down to noise.
@@ -2564,6 +2610,9 @@
   // Calculated on-demand for final selected recommendation batches.
   function computeRecommendationWhy(m, profile) {
     const w   = REC_CONFIG.weights;
+    // Whether more than one person is in the room. Solo sessions must never
+    // claim a recommendation "matches the group vibe".
+    const isGroupSession = !!(state && state.peers && state.peers.length > 1);
     const genres = movieGenres(m);
     const gen = genres.reduce((s, g) => s + (profile.genreWeights.get(g) || 0), 0) / Math.sqrt(genres.length || 1);
     const groupCosineScore = groupVibeScore(m, profile);
@@ -2576,19 +2625,23 @@
         if (!bestFav || sim > bestFav.sim) bestFav = { title: sample.title, sim };
       }
     }
+    // Justification floor: a "because you watched X" claim is only honest when
+    // the embeddings are genuinely close. Below this similarity, drop it.
+    if (bestFav && bestFav.sim < 0.38) { bestFav = null; }
     const drivers = [
-      { key: 'group', val: w.groupEmbedding * groupCosineScore },
+      { key: 'group', val: isGroupSession ? (w.groupEmbedding * groupCosineScore) : -Infinity },
       { key: 'fav',   val: bestFav ? w.groupEmbedding * ((bestFav.sim + 1) / 2) : -Infinity },
       { key: 'genre', val: w.genre * Math.max(0, gen) },
     ];
     drivers.sort((a, b) => b.val - a.val);
     if (drivers[0].key === 'fav' && bestFav) return '🍿 ' + bestFav.title;
-    if (drivers[0].key === 'genre' && gen > 0) return '✨ Fits your genre tastes';
-    return '👥 Matches group vibe';
+    if (drivers[0].key === 'genre' && gen > 0) return `✨ Top pick for ${m.primaryGenre || 'Movie'} fans`;
+    return isGroupSession ? '👥 Matches group vibe' : '✨ Fits your taste profile';
   }
 
   // Cold-start score: quality + small recency boost; no personalisation.
   function coldStartScore(m) {
+    if (isObscureMovie(m)) return -Infinity;
     const recency = isNewMovie(m) ? 0.15 : 0;
     return qualityScore(m) + recency;
   }
@@ -2603,6 +2656,7 @@
   function blendRecommendations(ranked, max) {
     const newTarget  = Math.round(max * REC_CONFIG.newFraction);
     const newRanked  = ranked.filter((r) => r.isNew);
+    const oldRanked  = ranked.filter((r) => !r.isNew);
     const out  = [];
     const used = new Set();
     const trayGenres = new Set();   // primaryGenres already placed in the tray
@@ -2623,16 +2677,18 @@
       return best;
     }
 
-    while (out.length < max && (ni < newRanked.length || pi < ranked.length)) {
+    while (out.length < max && (ni < newRanked.length || pi < oldRanked.length)) {
       const wantNew = newCount < newTarget;
       let pick = null;
       if (wantNew) {
         while (ni < newRanked.length && used.has(newRanked[ni].movie)) ni++;
         pick = pickFrom(newRanked, ni);
       }
+      // Fallback always draws from the *historical* lane so post-2024 releases
+      // never flood the slots reserved for older films.
       if (!pick) {
-        while (pi < ranked.length && used.has(ranked[pi].movie)) pi++;
-        pick = pickFrom(ranked, pi);
+        while (pi < oldRanked.length && used.has(oldRanked[pi].movie)) pi++;
+        pick = pickFrom(oldRanked, pi);
       }
       if (!pick) break;
       used.add(pick.movie);
@@ -2662,6 +2718,15 @@
     const candidates   = [];
     for (const m of MOVIE_DB) {
       if (!m || !m.title || !m.art) continue;
+      // Active mood filters (OR within each group): a movie must share at least
+      // one selected genre AND match one of the selected languages to survive.
+      if (activeSelectedGenres.length > 0) {
+        const genreMatch = (m.genres || []).some((g) => activeSelectedGenres.includes(g));
+        if (!genreMatch) continue;
+      }
+      if (activeSelectedLanguages.length > 0) {
+        if (!activeSelectedLanguages.includes(m.language)) continue;
+      }
       const nt = normTitle(m.title);
       if (seenSet.has(nt) || nominatedSet.has(nt) || skipSet.has(nt)) continue;
       let score, why = null;
@@ -2695,6 +2760,11 @@
   // current nominations, or the training stores change, so memoise to avoid
   // rescoring on every render.
   let recCache = { sig: null, list: [], personalised: false, totalAvailable: 0 };
+  // Active multi-select mood filters (empty = no filter). Genre values are the
+  // human-readable strings from GENRE_STRINGS; language values are ISO 639-1
+  // codes (LANGUAGE_INFO keys).
+  let activeSelectedGenres = [];
+  let activeSelectedLanguages = [];
   // Background precompute: a queue of ready-to-show batches for the *current*
   // signature so a Refresh tap can render instantly, plus the cached full
   // ranking so replenishing a batch never re-scores the catalogue.
@@ -2714,9 +2784,11 @@
     const pv = (state && state.peerVectors) || {};
     const pvSig = Object.keys(pv).sort().join('|');
     const embReady = window.EMBEDDINGS_BUFFER ? '1' : '0';
+    // Active mood filters re-rank the candidate pool, so fold them into the sig.
+    const filt = activeSelectedGenres.join(',') + '/' + activeSelectedLanguages.join(',');
     return MOVIE_DB.length + '#' + w + '#' + hist
          + '#' + intr + '#' + ni
-         + '#' + seenSig + '#' + pvSig + '#' + embReady;
+         + '#' + seenSig + '#' + pvSig + '#' + embReady + '#' + filt;
   }
 
   // Carve the next unseen batch out of the full ranking, marking those titles as
@@ -3338,6 +3410,114 @@
       scrollBy(1);
     });
     if (refresh) refresh.addEventListener('click', () => refreshRecommendations());
+  }
+
+  // ---- Multi-select mood filters (genre + language) ----
+  // Builds the two checkbox dropdown menus, keeps the active selection arrays in
+  // sync, and re-ranks the carousel from scratch whenever a box is toggled.
+  function setupRecommendationFilters() {
+    const genreMenu = $('#genreFilterMenu');
+    const langMenu  = $('#langFilterMenu');
+    const genreBtn  = $('#genreFilterBtn');
+    const langBtn   = $('#langFilterBtn');
+    if (!genreMenu || !langMenu || !genreBtn || !langBtn) return;
+
+    // Reset the per-session carousel offsets and rebuild the feed from the top
+    // so a filter change is reflected immediately rather than appended.
+    function applyFilterChange() {
+      try { sessionStorage.removeItem(REC_SESSION_SEEN_KEY); } catch (e) {}
+      recCache.sig = null;
+      recPrecompute.sig = null;
+      refreshRecommendations();
+    }
+
+    function updateLabel(labelEl, selected, allText, oneSuffix) {
+      if (!labelEl) return;
+      if (!selected.length) labelEl.textContent = allText;
+      else if (selected.length === 1) labelEl.textContent = selected[0];
+      else labelEl.textContent = `${selected.length} ${oneSuffix}`;
+    }
+
+    function buildMenu(menu, options, selectedArr, onChange) {
+      menu.innerHTML = '';
+      options.forEach(({ value, label }) => {
+        const row = el('label', 'flex items-center gap-2 px-2 py-1 rounded-md cursor-pointer hover:bg-panel2 text-xs');
+        const cb = el('input');
+        cb.type = 'checkbox';
+        cb.value = value;
+        cb.className = 'accent-accent2';
+        cb.checked = selectedArr.includes(value);
+        cb.addEventListener('change', () => {
+          const checked = [...menu.querySelectorAll('input[type=checkbox]')]
+            .filter((c) => c.checked).map((c) => c.value);
+          onChange(checked);
+        });
+        const span = el('span');
+        span.textContent = label;
+        row.appendChild(cb);
+        row.appendChild(span);
+        menu.appendChild(row);
+      });
+    }
+
+    // Genre options: unique human-readable genre strings (skip the catch-all
+    // "Unknown" bucket) sorted alphabetically.
+    const genreOptions = [...new Set(Object.values(GENRE_STRINGS))]
+      .filter((g) => g && g !== 'Unknown')
+      .sort()
+      .map((g) => ({ value: g, label: g }));
+    buildMenu(genreMenu, genreOptions, activeSelectedGenres, (checked) => {
+      activeSelectedGenres = checked;
+      updateLabel($('#genreFilterLabel'), activeSelectedGenres, 'All genres', 'genres');
+      applyFilterChange();
+    });
+
+    // Language options: ISO code -> readable name, de-duplicated by name and
+    // sorted alphabetically.
+    const seenLangNames = new Set();
+    const langOptions = Object.keys(LANGUAGE_INFO)
+      .map((code) => ({ value: code, label: LANGUAGE_INFO[code].name }))
+      .filter(({ label }) => {
+        if (seenLangNames.has(label)) return false;
+        seenLangNames.add(label);
+        return true;
+      })
+      .sort((a, b) => a.label.localeCompare(b.label));
+    buildMenu(langMenu, langOptions, activeSelectedLanguages, (checked) => {
+      activeSelectedLanguages = checked;
+      updateLabel($('#langFilterLabel'), activeSelectedLanguages.map((c) =>
+        (LANGUAGE_INFO[c] ? LANGUAGE_INFO[c].name : c)), 'All languages', 'languages');
+      applyFilterChange();
+    });
+
+    // Toggle a menu open/closed, closing the sibling menu first.
+    function toggleMenu(menu, btn, otherMenu, otherBtn) {
+      const willOpen = menu.classList.contains('hidden');
+      otherMenu.classList.add('hidden');
+      otherBtn.setAttribute('aria-expanded', 'false');
+      menu.classList.toggle('hidden', !willOpen);
+      btn.setAttribute('aria-expanded', String(willOpen));
+    }
+    genreBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleMenu(genreMenu, genreBtn, langMenu, langBtn);
+    });
+    langBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleMenu(langMenu, langBtn, genreMenu, genreBtn);
+    });
+
+    // Click-away: hide a menu when the user clicks outside its wrapper.
+    document.addEventListener('click', (e) => {
+      if (!e.target.closest('#genreFilterWrap')) {
+        genreMenu.classList.add('hidden');
+        genreBtn.setAttribute('aria-expanded', 'false');
+      }
+      if (!e.target.closest('#langFilterWrap')) {
+        langMenu.classList.add('hidden');
+        langBtn.setAttribute('aria-expanded', 'false');
+      }
+    });
   }
 
   // ---- Phase 2: drag-and-drop / arrow ranking ballot ----
@@ -4539,6 +4719,7 @@
     // ---- Recommendation typeahead on the nominate input ----
     wireTypeahead();
     wireRecommendationNav();
+    setupRecommendationFilters();
     wireTrainingFlow();
 
     // ---- History view toggle ----

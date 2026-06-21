@@ -232,6 +232,10 @@ def build_movie(
             "rottenTomatoes": parse_rt_percentage(omdb),
             "imdb": parse_imdb_rating(omdb, vote_average),
         },
+        # Popularity footprint (TMDB). Used client-side to filter obscure titles
+        # out of recommendations so the feed surfaces films people have heard of.
+        "vote_count": int(detail.get("vote_count", 0) or 0),
+        "popularity": float(detail.get("popularity", 0.0) or 0.0),
     }
     # Keep the TMDB id so future runs can skip movies already downloaded.
     tmdb_id = detail.get("id")
@@ -276,15 +280,22 @@ def extract_credits(detail: Dict[str, Any]) -> tuple:
 def movie_needs_enrichment(movie: Dict[str, Any]) -> bool:
     """True when a catalogued movie is missing fields we can backfill from TMDB.
 
-    Older ``movies.pbf`` entries were written before ``language``, ``cast`` and
-    ``director`` were captured. Because the sync is append-only and resumes
-    without re-downloading known ids, those gaps would otherwise be permanent.
-    A movie qualifies for a one-off re-fetch when it has a usable ``tmdb_id`` but
-    is still missing any of those three fields.
+    Older ``movies.pbf`` entries were written before ``language``, ``cast``,
+    ``director`` and the popularity footprint (``vote_count``/``popularity``)
+    were captured. Because the sync is append-only and resumes without
+    re-downloading known ids, those gaps would otherwise be permanent. A movie
+    qualifies for a one-off re-fetch when it has a usable ``tmdb_id`` but is
+    still missing any of those fields.
     """
     if not isinstance(movie.get("tmdb_id"), int):
         return False
-    return not movie.get("language") or not movie.get("cast") or not movie.get("director")
+    return (
+        not movie.get("language")
+        or not movie.get("cast")
+        or not movie.get("director")
+        or not movie.get("vote_count")
+        or not movie.get("popularity")
+    )
 
 
 def enrich_existing_movies(
@@ -293,7 +304,7 @@ def enrich_existing_movies(
     limit: int = 0,
     pause: float = 0.25,
 ) -> int:
-    """Backfill ``language``/``cast``/``director`` for stale catalogue entries.
+    """Backfill ``language``/``cast``/``director``/popularity for stale entries.
 
     Re-fetches each qualifying movie's TMDB detail (with credits) and fills in
     only the fields it is missing, mutating the dicts in place. Capped at *limit*
@@ -331,6 +342,17 @@ def enrich_existing_movies(
         if directors and not movie.get("director"):
             movie["director"] = directors
             changed = True
+        # Backfill popularity footprint for entries that predate these fields.
+        if not movie.get("vote_count"):
+            vote_count = int(detail.get("vote_count", 0) or 0)
+            if vote_count:
+                movie["vote_count"] = vote_count
+                changed = True
+        if not movie.get("popularity"):
+            popularity = float(detail.get("popularity", 0.0) or 0.0)
+            if popularity:
+                movie["popularity"] = popularity
+                changed = True
         if changed:
             updated += 1
     progress.done(suffix=f"{updated} updated")
@@ -669,9 +691,10 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         "--backfill-limit",
         type=int,
         default=2000,
-        help="Max existing movies missing language/cast/director to re-fetch and "
-        "enrich per run (0 = disable backfill). Older catalogue entries predate "
-        "those fields; this fills the backlog incrementally. Default: 2000.",
+        help="Max existing movies missing language/cast/director/popularity to "
+        "re-fetch and enrich per run (0 = disable backfill). Older catalogue "
+        "entries predate those fields; this fills the backlog incrementally. "
+        "Default: 2000.",
     )
     parser.add_argument(
         "--min-popularity",
