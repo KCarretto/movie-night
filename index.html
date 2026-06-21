@@ -66,9 +66,12 @@
     .dot.pulse { animation: pulse 1.4s infinite; }
     @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(124,92,255,.55)} 70%{box-shadow:0 0 0 8px rgba(124,92,255,0)} 100%{box-shadow:0 0 0 0 rgba(124,92,255,0)} }
 
-    /* Draggable rank rows */
-    .rank-row { transition: box-shadow .12s ease, opacity .12s ease; }
-    .rank-row.dragging { opacity: .9; box-shadow: 0 8px 24px rgba(0,0,0,.5); border-color: #7c5cff; }
+    /* Draggable rank rows. The `transform` transition lets sibling rows glide
+       to their new spot (FLIP) and the lifted row settle back smoothly. */
+    .rank-row { transition: box-shadow .15s ease, opacity .15s ease, transform .2s cubic-bezier(.2,.8,.2,1); }
+    /* The row under the finger follows the pointer with no transition lag and
+       floats above its neighbours while lifted. */
+    .rank-row.dragging { opacity: .95; box-shadow: 0 12px 28px rgba(0,0,0,.55); border-color: #7c5cff; transition: none; position: relative; z-index: 5; }
     .rank-row.drag-over { border-color: #7c5cff; }
     /* While a ballot row is reorderable, `touch-action:none` lets us own the
        whole row's touch gestures so a vertical drag reorders (never scrolls). */
@@ -272,7 +275,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.1</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.2</b>
   </footer>
 
   <!-- ===================== START-VOTING CONFIRM MODAL ===================== -->
@@ -1066,6 +1069,27 @@
     return closest.element;
   }
 
+  // FLIP animation: run a DOM-reordering callback and smoothly glide every row
+  // (except `skip`, e.g. the one being dragged) from its old position to its new
+  // one. We snapshot positions First, reorder (Last), Invert each row with a
+  // transform, then Play by clearing the transform so the CSS transition runs.
+  function flipReorder(container, reorder, skip) {
+    const rows = [...container.querySelectorAll('.rank-row')];
+    const firstTops = new Map(rows.map((r) => [r, r.getBoundingClientRect().top]));
+    reorder();
+    rows.forEach((row) => {
+      if (row === skip) return;
+      const dy = firstTops.get(row) - row.getBoundingClientRect().top;
+      if (!dy) return;
+      row.style.transition = 'none';
+      row.style.transform = `translateY(${dy}px)`;
+      // Force reflow so the starting transform is committed before we animate.
+      void row.offsetHeight;
+      row.style.transition = '';
+      row.style.transform = '';
+    });
+  }
+
   // True while any row is being dragged. On iOS Safari, preventDefault() on
   // pointermove does NOT stop page scrolling — only a non-passive touchmove
   // listener can. We register one globally and suppress scroll while dragging.
@@ -1084,6 +1108,8 @@
     let startX = 0;
     let startY = 0;
     let started = false;            // becomes true once movement exceeds threshold
+    let grabOffsetY = 0;            // distance from row's top to the grab point
+    let liTranslate = 0;           // current translateY applied to the lifted row
 
     // Document-level handlers are attached only for the duration of a drag.
     // Moving the <li> in the DOM (insertBefore/appendChild) while a pointer
@@ -1097,14 +1123,27 @@
         if (Math.abs(e.clientY - startY) < 6 && Math.abs(e.clientX - startX) < 6) return;
         started = true;
         ballotDragging = true;
+        liTranslate = 0;
+        grabOffsetY = startY - li.getBoundingClientRect().top;
         li.classList.add('dragging');
       }
       e.preventDefault();
       const ul = $('#ballot');
+      // Reorder the underlying list, gliding the displaced siblings into place.
       const after = getDragAfterElement(ul, e.clientY);
-      if (after == null) ul.appendChild(li);
-      else if (after !== li) ul.insertBefore(li, after);
-      renumberBallot();
+      if (after !== li && !(after == null && li === ul.lastElementChild)) {
+        flipReorder(ul, () => {
+          if (after == null) ul.appendChild(li);
+          else ul.insertBefore(li, after);
+        }, li);
+        renumberBallot();
+      }
+      // Make the lifted row track the finger. We derive its layout slot from the
+      // current rect minus the transform already applied, so it stays glued to
+      // the pointer even as the slot shifts during reordering.
+      const slotTop = li.getBoundingClientRect().top - liTranslate;
+      liTranslate = (e.clientY - grabOffsetY) - slotTop;
+      li.style.transform = `translateY(${liTranslate}px)`;
     };
 
     const end = (e) => {
@@ -1112,14 +1151,27 @@
       dragging = false;
       ballotDragging = false;
       activePointer = null;
-      li.classList.remove('dragging');
       document.removeEventListener('pointermove', onMove);
       document.removeEventListener('pointerup', end);
       document.removeEventListener('pointercancel', end);
       if (started) {
         // Rebuild the canonical order from the final DOM order.
         ballotOrder = [...$('#ballot').querySelectorAll('.rank-row')].map((n) => n.dataset.id);
-        renderBallotIfNeeded();
+        // Let the lifted row settle into its slot, then re-render once it lands
+        // so the transition is visible instead of an instant snap.
+        li.classList.remove('dragging');   // restores the transform transition
+        li.style.transform = '';
+        const settle = (ev) => {
+          if (ev && ev.propertyName !== 'transform') return;
+          li.removeEventListener('transitionend', settle);
+          renderBallotIfNeeded();
+        };
+        li.addEventListener('transitionend', settle);
+        // Fallback in case no transition fires (row already at rest).
+        setTimeout(settle, 260);
+      } else {
+        li.classList.remove('dragging');
+        li.style.transform = '';
       }
       started = false;
     };
