@@ -553,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 12</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 13</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -3162,7 +3162,10 @@
     if (!modal || !heading || !stars) return;
     heading.textContent = `RATE: ${title}`;
     stars.dataset.title = title;
-    stars.innerHTML = starSelectorInner(0);
+    const current = (findWatched(title) || {}).rating || 0;
+    stars.dataset.currentRating = current;
+    const rText = current > 0 ? `(${current})` : '';
+    stars.innerHTML = `${starSelectorInner(current)}<span class="rating-val text-sm text-slate-400 ml-2 self-center">${rText}</span>`;
     modal.classList.remove('hidden');
   }
 
@@ -3193,7 +3196,10 @@
       stars.addEventListener('click', (e) => {
         const star = e.target.closest && e.target.closest('i[data-rate]');
         if (!star) return;
-        const rating = Number(star.dataset.rate) || 0;
+        const sRate = Number(star.dataset.rate) || 0;
+        const rect = star.getBoundingClientRect();
+        const isLeftHalf = (e.clientX - rect.left) < rect.width / 2;
+        const rating = isLeftHalf ? sRate - 0.5 : sRate;
         if (rateModalPendingTitle) {
           if (inWatchlist(rateModalPendingTitle)) {
             removeFromWatchlistSilent(rateModalPendingTitle);
@@ -3202,25 +3208,18 @@
           closeRateModal();
         }
       });
-      stars.addEventListener('mouseover', (e) => {
+      stars.addEventListener('mousemove', (e) => {
         const star = e.target.closest && e.target.closest('i[data-rate]');
         if (!star) return;
-        const rate = Number(star.dataset.rate) || 0;
-        const starIcons = stars.querySelectorAll('i[data-rate]');
-        starIcons.forEach((s) => {
-          const sRate = Number(s.dataset.rate) || 0;
-          if (sRate <= rate) {
-            s.className = 'fa-solid text-gold fa-star cursor-pointer';
-          } else {
-            s.className = 'fa-regular text-slate-600 fa-star cursor-pointer';
-          }
-        });
+        const sRate = Number(star.dataset.rate) || 0;
+        const rect = star.getBoundingClientRect();
+        const isLeftHalf = (e.clientX - rect.left) < rect.width / 2;
+        const rate = isLeftHalf ? sRate - 0.5 : sRate;
+        renderStarState(stars, rate);
       });
-      stars.addEventListener('mouseout', () => {
-        const starIcons = stars.querySelectorAll('i[data-rate]');
-        starIcons.forEach((s) => {
-          s.className = 'fa-regular text-slate-600 fa-star cursor-pointer';
-        });
+      stars.addEventListener('mouseleave', () => {
+        const current = Number(stars.dataset.currentRating) || 0;
+        renderStarState(stars, current);
       });
     }
   }
@@ -3379,7 +3378,10 @@
     if (label) label.textContent = action === 'watched'
       ? 'How would you rate it?'
       : 'How interested are you in seeing it?';
-    if (stars) stars.innerHTML = trainStarsInner(0);
+    if (stars) {
+      stars.dataset.currentRating = 0;
+      stars.innerHTML = `${trainStarsInner(0)}<span class="rating-val text-sm text-slate-400 ml-2 self-center"></span>`;
+    }
     if (prompt) prompt.classList.remove('hidden');
     if (actions) actions.classList.add('hidden');
   }
@@ -3391,12 +3393,7 @@
     if (actions && trainCurrent) actions.classList.remove('hidden');
   }
   function trainStarsInner(rating) {
-    let html = '';
-    for (let s = 1; s <= 5; s++) {
-      const on = s <= (rating || 0);
-      html += `<i class="${on ? 'fa-solid text-gold' : 'fa-regular text-slate-600'} fa-star cursor-pointer" data-rate="${s}" role="button" aria-label="${s} star${s === 1 ? '' : 's'}"></i>`;
-    }
-    return html;
+    return starSelectorInner(rating);
   }
 
   // Apply a star rating for the pending "Watched" / "Interested" action, persist
@@ -3445,11 +3442,30 @@
     // Star clicks within the training rate prompt (own handler so the global
     // rating-stars handler that writes to the watched list never fires here).
     const stars = $('#trainRateStars');
-    if (stars) stars.addEventListener('click', (e) => {
-      const star = e.target.closest && e.target.closest('i[data-rate]');
-      if (!star) return;
-      applyTrainRating(Number(star.dataset.rate) || 0);
-    });
+    if (stars) {
+      stars.addEventListener('click', (e) => {
+        const star = e.target.closest && e.target.closest('i[data-rate]');
+        if (!star) return;
+        const sRate = Number(star.dataset.rate) || 0;
+        const rect = star.getBoundingClientRect();
+        const isLeftHalf = (e.clientX - rect.left) < rect.width / 2;
+        const rating = isLeftHalf ? sRate - 0.5 : sRate;
+        applyTrainRating(rating);
+      });
+      stars.addEventListener('mousemove', (e) => {
+        const star = e.target.closest && e.target.closest('i[data-rate]');
+        if (!star) return;
+        const sRate = Number(star.dataset.rate) || 0;
+        const rect = star.getBoundingClientRect();
+        const isLeftHalf = (e.clientX - rect.left) < rect.width / 2;
+        const rate = isLeftHalf ? sRate - 0.5 : sRate;
+        renderStarState(stars, rate);
+      });
+      stars.addEventListener('mouseleave', () => {
+        const current = Number(stars.dataset.currentRating) || 0;
+        renderStarState(stars, current);
+      });
+    }
   }
 
   function checkAndAppendRecs(dir) {
@@ -3998,7 +4014,10 @@
     btn.classList.toggle('opacity-60', !!w);
     const stars = $('#resultsStars');
     stars.dataset.title = winner;
-    stars.innerHTML = starSelectorInner(w ? w.rating : 0);
+    const rating = w ? w.rating : 0;
+    stars.dataset.currentRating = rating;
+    const rText = rating > 0 ? `(${rating})` : '';
+    stars.innerHTML = `${starSelectorInner(rating)}<span class="rating-val text-xs text-slate-400 ml-1.5 self-center">${rText}</span>`;
     stars.classList.toggle('hidden', !w);
   }
 
@@ -4026,14 +4045,51 @@
   // from the enclosing .rating-stars element and persists the chosen rating.
   function starSelectorInner(rating) {
     let html = '';
+    const full = Math.floor(rating || 0);
+    const frac = (rating || 0) - full;
+    const hasHalf = frac >= 0.25 && frac < 0.75;
+    const fullCount = full + (frac >= 0.75 ? 1 : 0);
+
     for (let s = 1; s <= 5; s++) {
-      const on = s <= (rating || 0);
-      html += `<i class="${on ? 'fa-solid text-gold' : 'fa-regular text-slate-600'} fa-star cursor-pointer" data-rate="${s}" role="button" aria-label="${s} star${s === 1 ? '' : 's'}"></i>`;
+      if (s <= fullCount) {
+        html += `<i class="fa-solid text-gold fa-star cursor-pointer" data-rate="${s}" role="button" aria-label="${s} star${s === 1 ? '' : 's'}"></i>`;
+      } else if (hasHalf && s === full + 1) {
+        html += `<i class="fa-solid text-gold fa-star-half-stroke cursor-pointer" data-rate="${s}" role="button" aria-label="${s - 0.5} stars"></i>`;
+      } else {
+        html += `<i class="fa-regular text-slate-600 fa-star cursor-pointer" data-rate="${s}" role="button" aria-label="${s} star${s === 1 ? '' : 's'}"></i>`;
+      }
     }
     return html;
   }
   function starSelector(title, rating) {
-    return `<span class="rating-stars inline-flex gap-0.5 text-lg" data-title="${escapeHtml(title)}">${starSelectorInner(rating)}</span>`;
+    const rText = rating > 0 ? `(${rating})` : '';
+    return `<span class="rating-stars inline-flex items-center gap-0.5 text-lg" data-title="${escapeHtml(title)}" data-current-rating="${rating || 0}">
+      ${starSelectorInner(rating)}
+      <span class="rating-val text-xs text-slate-400 ml-1.5 self-center">${rText}</span>
+    </span>`;
+  }
+  function renderStarState(stars, rate) {
+    const starIcons = stars.querySelectorAll('i[data-rate]');
+    const full = Math.floor(rate);
+    const frac = rate - full;
+    const hasHalf = frac >= 0.25 && frac < 0.75;
+    const fullCount = full + (frac >= 0.75 ? 1 : 0);
+
+    starIcons.forEach((s) => {
+      const sVal = Number(s.dataset.rate) || 0;
+      if (sVal <= fullCount) {
+        s.className = 'fa-solid text-gold fa-star cursor-pointer';
+      } else if (hasHalf && sVal === full + 1) {
+        s.className = 'fa-solid text-gold fa-star-half-stroke cursor-pointer';
+      } else {
+        s.className = 'fa-regular text-slate-600 fa-star cursor-pointer';
+      }
+    });
+
+    const valSpan = stars.querySelector('.rating-val');
+    if (valSpan) {
+      valSpan.textContent = rate > 0 ? `(${rate})` : '';
+    }
   }
 
   // ======================================================================
@@ -4381,7 +4437,7 @@
   // ---- Letterboxd CSV import (films watched + ratings) ----
   // Letterboxd exports (watched.csv / ratings.csv / diary.csv) share a header
   // row with at least a "Name" column and usually "Year", "Rating" and "Date".
-  // A 0.5–5 star Letterboxd rating maps to our 0–5 integer scale (rounded).
+  // A 0.5–5 star Letterboxd rating maps to our 0–5 scale (rounded to nearest 0.5).
   function parseCsv(text) {
     const rows = [];
     let row = [], field = '', inQuotes = false;
@@ -4421,7 +4477,7 @@
         const cols = rows[i];
         const title = (cols[nameIdx] || '').trim();
         if (!title) continue;
-        const rating = ratingIdx >= 0 ? Math.max(0, Math.min(5, Math.round(parseFloat(cols[ratingIdx]) || 0))) : 0;
+        const rating = ratingIdx >= 0 ? Math.max(0, Math.min(5, Math.round(parseFloat(cols[ratingIdx]) * 2) / 2 || 0)) : 0;
         const dateStr = (watchedDateIdx >= 0 ? cols[watchedDateIdx] : (dateIdx >= 0 ? cols[dateIdx] : '')) || '';
         const ts = dateStr ? (Date.parse(dateStr) || Date.now()) : Date.now();
         const existing = list.find((w) => normTitle(w.title) === normTitle(title));
@@ -4894,9 +4950,39 @@
       const wrap = star.closest('.rating-stars');
       const title = wrap && wrap.dataset.title;
       if (!title) return;
-      upsertWatched(title, Number(star.dataset.rate) || 0);
+
+      const sRate = Number(star.dataset.rate) || 0;
+      const rect = star.getBoundingClientRect();
+      const isLeftHalf = (e.clientX - rect.left) < rect.width / 2;
+      const rating = isLeftHalf ? sRate - 0.5 : sRate;
+
+      upsertWatched(title, rating);
       renderResultsWatched();
       if (currentView === 'history') renderHistory();
+    });
+
+    document.addEventListener('mousemove', (e) => {
+      const star = e.target.closest && e.target.closest('.rating-stars i[data-rate]');
+      if (!star) return;
+      const wrap = star.closest('.rating-stars');
+      if (wrap.id === 'trainRateStars' || wrap.id === 'rateModalStars') return; // Handled separately
+
+      const sRate = Number(star.dataset.rate) || 0;
+      const rect = star.getBoundingClientRect();
+      const isLeftHalf = (e.clientX - rect.left) < rect.width / 2;
+      const rate = isLeftHalf ? sRate - 0.5 : sRate;
+      renderStarState(wrap, rate);
+    });
+
+    document.addEventListener('mouseout', (e) => {
+      const wrap = e.target.closest && e.target.closest('.rating-stars');
+      if (!wrap) return;
+      if (wrap.id === 'trainRateStars' || wrap.id === 'rateModalStars') return; // Handled separately
+
+      if (!e.relatedTarget || !wrap.contains(e.relatedTarget)) {
+        const current = Number(wrap.dataset.currentRating) || 0;
+        renderStarState(wrap, current);
+      }
     });
   }
 
