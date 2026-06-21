@@ -3,7 +3,9 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>🎬 Plot Polls — P2P Ranked-Choice Voting</title>
+  <title>Plot Polls</title>
+  <!-- Movie-reel favicon (inline SVG so it stays self-contained, no extra file). -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='12'%20fill='%230b0d12'/%3E%3Ccircle%20cx='32'%20cy='32'%20r='20'%20fill='none'%20stroke='%23ffce4d'%20stroke-width='4'/%3E%3Ccircle%20cx='32'%20cy='32'%20r='5'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='32'%20cy='15'%20r='4'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='32'%20cy='49'%20r='4'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='15'%20cy='32'%20r='4'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='49'%20cy='32'%20r='4'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='20'%20cy='20'%20r='4'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='44'%20cy='20'%20r='4'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='20'%20cy='44'%20r='4'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='44'%20cy='44'%20r='4'%20fill='%23ffce4d'/%3E%3C/svg%3E" />
 
   <!-- ===== External dependencies (all via CDN, no build step) ===== -->
   <!-- Tailwind CSS for fast, clean, responsive styling -->
@@ -144,11 +146,16 @@
     .desc-wrap:hover .desc-pop, .desc-wrap:focus-within .desc-pop, .desc-wrap.open .desc-pop { display: block; }
 
     /* Backdrop collage built from the art of the currently nominated movies.
-       Sits behind everything as a soft, blurred wash so the UI stays readable. */
+       A lightly-blurred, tiled mosaic (columns of posters, repeated vertically)
+       so the page takes on the flavour of the current options while staying
+       readable. The `.winner` variant swaps in the winning movie's art as a
+       single, even-less-blurred cover image. */
     #bgArt { position: fixed; inset: 0; z-index: -1; pointer-events: none;
-      background-size: cover; background-position: center; background-repeat: no-repeat;
-      filter: blur(28px) saturate(1.1) brightness(.42); transform: scale(1.12);
+      background-position: center; background-repeat: repeat-y;
+      filter: blur(12px) saturate(1.15) brightness(.45); transform: scale(1.06);
       opacity: 0; transition: opacity .8s ease; }
+    #bgArt.winner { background-repeat: no-repeat; background-size: cover;
+      filter: blur(7px) saturate(1.15) brightness(.5); }
     #bgArt.show { opacity: 1; }
   </style>
 </head>
@@ -205,6 +212,15 @@
             <div id="settingsMenu" class="menu hidden card p-1">
               <button id="changeNameBtn" type="button"
                       class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2">Change name</button>
+              <div class="my-1 border-t border-line"></div>
+              <button id="exportDataBtn" type="button"
+                      class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-file-export w-4 mr-1.5 text-slate-400"></i>Export my data</button>
+              <button id="importDataBtn" type="button"
+                      class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-file-import w-4 mr-1.5 text-slate-400"></i>Import data</button>
+              <button id="importLetterboxdBtn" type="button"
+                      class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-film w-4 mr-1.5 text-slate-400"></i>Import from Letterboxd</button>
+              <button id="syncDeviceBtn" type="button"
+                      class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-qrcode w-4 mr-1.5 text-slate-400"></i>Sync to this device</button>
             </div>
           </div>
         </div>
@@ -318,7 +334,9 @@
     <section id="phaseResults" class="hidden card p-4 space-y-4">
       <h2 class="font-display text-2xl text-center">🏆 AND THE WINNER IS 🏆</h2>
       <div id="winnerCard" class="pop-in text-center bg-gradient-to-b from-panel2 to-ink border border-gold/40 rounded-2xl p-6">
+        <div id="winnerArt" class="hidden flex justify-center mb-3"></div>
         <div id="winnerTitle" class="font-display text-4xl text-gold">—</div>
+        <div id="winnerRatings" class="text-sm text-slate-300 mt-2"></div>
         <div id="winnerSub" class="text-sm text-slate-400 mt-1"></div>
       </div>
 
@@ -381,8 +399,12 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.7</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.8</b>
   </footer>
+
+  <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
+  <input id="importFileInput" type="file" accept="application/json,.json" class="hidden" />
+  <input id="letterboxdFileInput" type="file" accept="text/csv,.csv" class="hidden" />
 
   <!-- ===================== START-VOTING CONFIRM MODAL ===================== -->
   <div id="startVoteModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -393,6 +415,55 @@
       <div class="flex gap-2">
         <button id="cancelStartVoteBtn" class="btn flex-1 bg-panel2 border border-line text-sm font-semibold px-4 py-2.5 rounded-lg">Cancel</button>
         <button id="confirmStartVoteBtn" class="btn btn-primary flex-1 text-white text-sm font-semibold px-4 py-2.5 rounded-lg">Start</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== IMPORT / SYNC CONFIRM MODAL ===================== -->
+  <!-- Shown before any incoming data replaces what's on this device, with a
+       summary of the changes so the user can confirm. -->
+  <div id="importConfirmModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div id="importConfirmBackdrop" class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
+    <div class="card relative z-10 max-w-sm w-full p-6 space-y-4">
+      <h3 class="font-display text-2xl text-center">CONFIRM SYNC</h3>
+      <p id="importConfirmSource" class="text-sm text-slate-300 text-center"></p>
+      <div id="importConfirmSummary" class="text-sm bg-ink border border-line rounded-lg p-3 space-y-1"></div>
+      <p class="text-xs text-accent text-center">This will fully replace the data on this device.</p>
+      <div class="flex gap-2">
+        <button id="cancelImportBtn" class="btn flex-1 bg-panel2 border border-line text-sm font-semibold px-4 py-2.5 rounded-lg">Cancel</button>
+        <button id="confirmImportBtn" class="btn btn-primary flex-1 text-white text-sm font-semibold px-4 py-2.5 rounded-lg">Replace &amp; sync</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===================== DEVICE SYNC (QR + WebRTC) MODAL ===================== -->
+  <div id="syncModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div id="syncBackdrop" class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
+    <div class="card relative z-10 max-w-sm w-full p-6 space-y-4">
+      <div class="flex items-center justify-between">
+        <h3 class="font-display text-2xl">SYNC TO THIS DEVICE</h3>
+        <button id="closeSyncBtn" class="btn w-8 h-8 rounded-lg bg-panel2 border border-line text-slate-300" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
+      </div>
+
+      <!-- Mode picker -->
+      <div id="syncPicker" class="space-y-2">
+        <p class="text-sm text-slate-300">Move your watch &amp; vote history between devices.</p>
+        <button id="syncShareBtn" class="btn btn-accent2 text-white text-sm font-semibold w-full px-4 py-2.5 rounded-lg"><i class="fa-solid fa-qrcode mr-2"></i>Share this device's data</button>
+        <button id="syncReceiveBtn" class="btn bg-panel2 border border-line text-sm font-semibold w-full px-4 py-2.5 rounded-lg"><i class="fa-solid fa-camera mr-2"></i>Receive data (scan a code)</button>
+      </div>
+
+      <!-- Share (host) view: show a QR the other device scans/opens -->
+      <div id="syncShareView" class="hidden space-y-3 text-center">
+        <p class="text-sm text-slate-300">On the <b>other</b> device, scan this code (or open the link) to pull this device's data.</p>
+        <div class="bg-white p-2 rounded-xl inline-block"><div id="syncQr"></div></div>
+        <p id="syncShareStatus" class="text-xs text-slate-400">Waiting for the other device…</p>
+      </div>
+
+      <!-- Receive (scan) view -->
+      <div id="syncReceiveView" class="hidden space-y-3">
+        <p class="text-sm text-slate-300">Scan the code shown on the device that has the data.</p>
+        <div id="syncReader" class="rounded-xl overflow-hidden"></div>
+        <p id="syncReceiveStatus" class="text-xs text-slate-400 h-4"></p>
       </div>
     </div>
   </div>
@@ -717,6 +788,7 @@
   function boot() {
     const params = new URLSearchParams(location.search);
     const urlRoom = params.get('room');
+    const syncId = params.get('sync');   // capture before the URL is rewritten
     const hostRoom = recallHostRoom();
 
     if (urlRoom && normalizeRoomId(urlRoom) === hostRoom) {
@@ -741,6 +813,10 @@
     $('#roomIdLabel').textContent = roomId;
     wireUiEvents();
     loadMovieDb();   // fetch the recommendation catalogue (progressive enhancement)
+
+    // If this page was opened from a "sync" QR/link, pull the other device's
+    // data and show the confirm dialog before replacing anything locally.
+    if (syncId) receiveSyncData(syncId);
   }
 
   // ======================================================================
@@ -1339,37 +1415,66 @@
     box.classList.toggle('text-slate-300', !everyone);
   }
 
-  // Build a soft, blurred backdrop from the poster art of the nominated movies
-  // so the page takes on the flavour of the current options. Falls back to the
-  // plain gradient when none of the nominations have catalogue art.
+  // Build a soft, lightly-blurred backdrop from the poster art of the nominated
+  // movies so the page takes on the flavour of the current options. The posters
+  // are laid out as side-by-side columns (horizontal variety) that tile down the
+  // page (vertical repetition). In the results phase the winning movie's art
+  // takes over the whole backdrop as a single cover image. Falls back to the
+  // plain gradient when no relevant art is available.
   let bgArtSig = '';
   function updateBackground() {
     const bg = $('#bgArt');
     if (!bg) return;
+
+    // ---- Results: the winner's art becomes the full-page backdrop. ----
+    if (state.phase === 'results' && state.results && state.results.winnerTitle) {
+      const meta = movieMeta(state.results.winnerTitle);
+      const art = meta && meta.art;
+      const sig = 'winner|' + (art || '');
+      if (sig === bgArtSig) return;
+      bgArtSig = sig;
+      if (!art) { bg.classList.remove('show', 'winner'); bg.style.backgroundImage = ''; return; }
+      bg.style.backgroundImage = `url("${art}")`;
+      bg.style.backgroundSize = 'cover';
+      bg.style.backgroundPosition = 'center';
+      bg.classList.add('winner', 'show');
+      return;
+    }
+
     const arts = [];
     const seen = new Set();
     state.movies.forEach((m) => {
       const meta = movieMeta(m.title);
       if (meta && meta.art && !seen.has(meta.art)) { seen.add(meta.art); arts.push(meta.art); }
     });
-    const sig = arts.join('|');
+    const sig = 'tile|' + arts.join('|');
     if (sig === bgArtSig) return;   // nothing changed; avoid reflowing the layers
     bgArtSig = sig;
+    bg.classList.remove('winner');
     if (!arts.length) {
       bg.classList.remove('show');
       bg.style.backgroundImage = '';
       return;
     }
-    // Tile the posters edge-to-edge as a horizontal strip behind the heavy blur.
+    // Lay the posters out as a tiled mosaic: a row of columns (cycling through
+    // the available art so it repeats horizontally) that each tile vertically.
     const n = arts.length;
-    const step = 100 / n;
-    const layers = arts.map((url) => `url("${url}")`).reverse().join(', ');
-    const sizes = arts.map(() => `${step}% 100%`).reverse().join(', ');
-    // Spread the poster tiles evenly across the full width.
-    const pos = arts.map((_, i) => `${n === 1 ? 50 : (i * 100) / (n - 1)}% center`).reverse().join(', ');
-    bg.style.backgroundImage = layers;
-    bg.style.backgroundSize = sizes;
-    bg.style.backgroundPosition = pos;
+    const cols = Math.min(8, Math.max(3, n * 2));
+    const tileW = Math.max(140, Math.round((window.innerWidth || 1200) / cols));
+    const tileH = Math.round(tileW * 1.5);
+    const layers = [];
+    const sizes = [];
+    const positions = [];
+    for (let i = 0; i < cols; i++) {
+      layers.push(`url("${arts[i % n]}")`);
+      // Width is a fixed share of the viewport (so it adapts on resize); height
+      // is a fixed pixel size so each column tiles down the page.
+      sizes.push(`${(100 / cols).toFixed(4)}% ${tileH}px`);
+      positions.push(`${cols === 1 ? 50 : (i * 100) / (cols - 1)}% 0`);
+    }
+    bg.style.backgroundImage = layers.join(', ');
+    bg.style.backgroundSize = sizes.join(', ');
+    bg.style.backgroundPosition = positions.join(', ');
     bg.classList.add('show');
   }
 
@@ -1759,6 +1864,25 @@
       ? `Won across ${r.rounds.length} round${r.rounds.length === 1 ? '' : 's'} · ${r.totalBallots} ballot${r.totalBallots === 1 ? '' : 's'}`
       : 'Nobody submitted a ranking.';
 
+    // Show the winner's poster art and ratings (mirrors the typeahead card).
+    const winMeta = r.winnerTitle ? movieMeta(r.winnerTitle) : null;
+    const winArt = $('#winnerArt');
+    const winRatings = $('#winnerRatings');
+    if (winArt) {
+      if (winMeta) {
+        winArt.innerHTML = posterHtml(winMeta, 'w-24 h-36');
+        winArt.classList.remove('hidden');
+      } else {
+        winArt.innerHTML = '';
+        winArt.classList.add('hidden');
+      }
+    }
+    if (winRatings) {
+      const line = winMeta ? ratingsLine(winMeta) : '';
+      winRatings.innerHTML = line;
+      winRatings.classList.toggle('hidden', !line);
+    }
+
     const nameOf = (peerId) => {
       const p = state.peers.find((x) => x.id === peerId);
       return p ? p.name : 'Unknown';
@@ -2027,6 +2151,293 @@
   }
 
   // ======================================================================
+  //  DATA EXPORT / IMPORT / SYNC  (watch history + movie-night vote history)
+  // ======================================================================
+  const EXPORT_TYPE = 'plot-polls-export';
+  const EXPORT_VERSION = 1;
+
+  // Build the portable snapshot of everything this device stores locally.
+  function buildExportData() {
+    return {
+      type: EXPORT_TYPE,
+      version: EXPORT_VERSION,
+      exportedAt: new Date().toISOString(),
+      watched: loadWatched(),
+      history: loadHistory(),
+    };
+  }
+
+  // Trigger a download of the current data as nicely-formatted JSON.
+  function exportMyData() {
+    const data = buildExportData();
+    const json = JSON.stringify(data, null, 2);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = el('a');
+    a.href = url;
+    const stamp = new Date().toISOString().slice(0, 10);
+    a.download = `plot-polls-data-${stamp}.json`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  // Validate & normalize an incoming payload into { watched, history }, or null.
+  function normalizeImport(payload) {
+    if (!payload || typeof payload !== 'object') return null;
+    if (payload.type && payload.type !== EXPORT_TYPE) return null;
+    const watched = Array.isArray(payload.watched) ? payload.watched : [];
+    const history = Array.isArray(payload.history) ? payload.history : [];
+    if (!payload.type && !payload.watched && !payload.history) return null;
+    const cleanWatched = watched
+      .filter((w) => w && typeof w.title === 'string' && w.title.trim())
+      .map((w) => ({
+        title: String(w.title).trim(),
+        rating: Math.max(0, Math.min(5, Number(w.rating) || 0)),
+        watchedAt: Number(w.watchedAt) || Date.now(),
+      }));
+    const cleanHistory = history.filter((h) => h && typeof h === 'object');
+    return { watched: cleanWatched, history: cleanHistory };
+  }
+
+  // Fully replace this device's data with an imported snapshot, then refresh.
+  function applyImportedData(data) {
+    saveWatched(data.watched);
+    saveHistory(data.history);
+    shareSeen();          // re-share the new watched list + re-render everything
+    renderAll();
+    if (currentView === 'history') renderHistory();
+  }
+
+  // ---- Import confirm dialog (used by file import + device sync) ----
+  let pendingImport = null;
+  function openImportConfirm(data, sourceLabel) {
+    pendingImport = data;
+    const curW = loadWatched().length, curH = loadHistory().length;
+    const newW = data.watched.length, newH = data.history.length;
+    $('#importConfirmSource').textContent = sourceLabel || 'Incoming data';
+    $('#importConfirmSummary').innerHTML = `
+      <div class="flex justify-between"><span class="text-slate-400">Watched movies</span><span><b>${curW}</b> → <b class="text-gold">${newW}</b></span></div>
+      <div class="flex justify-between"><span class="text-slate-400">Movie nights</span><span><b>${curH}</b> → <b class="text-gold">${newH}</b></span></div>`;
+    $('#importConfirmModal').classList.remove('hidden');
+  }
+  function closeImportConfirm() {
+    $('#importConfirmModal').classList.add('hidden');
+    pendingImport = null;
+  }
+
+  // ---- JSON file import ----
+  function importDataFromFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      let parsed = null;
+      try { parsed = JSON.parse(String(reader.result)); } catch (e) { parsed = null; }
+      const data = normalizeImport(parsed);
+      if (!data) { alert('That file is not a valid Plot Polls export.'); return; }
+      openImportConfirm(data, `From file “${file.name}”`);
+    };
+    reader.onerror = () => alert('Could not read that file.');
+    reader.readAsText(file);
+  }
+
+  // ---- Letterboxd CSV import (films watched + ratings) ----
+  // Letterboxd exports (watched.csv / ratings.csv / diary.csv) share a header
+  // row with at least a "Name" column and usually "Year", "Rating" and "Date".
+  // A 0.5–5 star Letterboxd rating maps to our 0–5 integer scale (rounded).
+  function parseCsv(text) {
+    const rows = [];
+    let row = [], field = '', inQuotes = false;
+    const s = String(text).replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    for (let i = 0; i < s.length; i++) {
+      const c = s[i];
+      if (inQuotes) {
+        if (c === '"') {
+          if (s[i + 1] === '"') { field += '"'; i++; }
+          else inQuotes = false;
+        } else field += c;
+      } else if (c === '"') inQuotes = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\n') { row.push(field); rows.push(row); row = []; field = ''; }
+      else field += c;
+    }
+    if (field.length || row.length) { row.push(field); rows.push(row); }
+    return rows.filter((r) => r.length && r.some((v) => v && v.trim()));
+  }
+
+  function importLetterboxdFromFile(file) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const rows = parseCsv(reader.result);
+      if (rows.length < 2) { alert('That CSV does not look like a Letterboxd export.'); return; }
+      const header = rows[0].map((h) => h.trim().toLowerCase());
+      const nameIdx = header.indexOf('name');
+      const yearIdx = header.indexOf('year');
+      const ratingIdx = header.indexOf('rating');
+      const dateIdx = header.indexOf('date');
+      const watchedDateIdx = header.indexOf('watched date');
+      if (nameIdx === -1) { alert('That CSV is missing a "Name" column — is it a Letterboxd export?'); return; }
+      const list = loadWatched();
+      let added = 0, updated = 0;
+      for (let i = 1; i < rows.length; i++) {
+        const cols = rows[i];
+        const title = (cols[nameIdx] || '').trim();
+        if (!title) continue;
+        const rating = ratingIdx >= 0 ? Math.max(0, Math.min(5, Math.round(parseFloat(cols[ratingIdx]) || 0))) : 0;
+        const dateStr = (watchedDateIdx >= 0 ? cols[watchedDateIdx] : (dateIdx >= 0 ? cols[dateIdx] : '')) || '';
+        const ts = dateStr ? (Date.parse(dateStr) || Date.now()) : Date.now();
+        const existing = list.find((w) => normTitle(w.title) === normTitle(title));
+        if (existing) {
+          if (rating) existing.rating = rating;
+          updated++;
+        } else {
+          list.push({ title, rating, watchedAt: ts });
+          added++;
+        }
+      }
+      if (!added && !updated) { alert('No films were found in that CSV.'); return; }
+      saveWatched(list);
+      shareSeen();
+      renderAll();
+      if (currentView === 'history') renderHistory();
+      alert(`Imported from Letterboxd: ${added} added, ${updated} updated.`);
+    };
+    reader.onerror = () => alert('Could not read that file.');
+    reader.readAsText(file);
+  }
+
+  // ======================================================================
+  //  DEVICE SYNC over WebRTC (host = data source, peer = receiver)
+  // ======================================================================
+  // A dedicated PeerJS instance keeps sync independent of the voting room.
+  let syncPeer = null;          // PeerJS instance used only for device sync
+  let syncQr = null;            // QRCode instance in the share view
+  let syncScanner = null;       // Html5Qrcode instance in the receive view
+
+  function destroySyncPeer() {
+    try { if (syncPeer) syncPeer.destroy(); } catch (e) {}
+    syncPeer = null;
+  }
+
+  function openSyncModal() {
+    closeSettingsMenu();
+    $('#syncPicker').classList.remove('hidden');
+    $('#syncShareView').classList.add('hidden');
+    $('#syncReceiveView').classList.add('hidden');
+    $('#syncModal').classList.remove('hidden');
+  }
+  function closeSyncModal() {
+    $('#syncModal').classList.add('hidden');
+    stopSyncScanner();
+    destroySyncPeer();
+    $('#syncQr').innerHTML = '';
+    syncQr = null;
+  }
+
+  // --- Share mode: become a sync host and show a QR the other device pulls. ---
+  function startSyncShare() {
+    $('#syncPicker').classList.add('hidden');
+    $('#syncShareView').classList.remove('hidden');
+    $('#syncShareStatus').textContent = 'Starting…';
+    destroySyncPeer();
+    const id = `sync-${Math.random().toString(36).slice(2, 10)}`;
+    syncPeer = new Peer(id, { debug: 1 });
+    syncPeer.on('open', (openId) => {
+      const url = `${location.origin}${location.pathname}?sync=${encodeURIComponent(openId)}`;
+      const holder = $('#syncQr');
+      holder.innerHTML = '';
+      try { syncQr = new QRCode(holder, { text: url, width: 168, height: 168, correctLevel: QRCode.CorrectLevel.M }); }
+      catch (e) { holder.textContent = 'QR error'; }
+      $('#syncShareStatus').textContent = 'Waiting for the other device…';
+    });
+    syncPeer.on('connection', (conn) => {
+      conn.on('open', () => { $('#syncShareStatus').textContent = 'Sending data…'; });
+      conn.on('data', (msg) => {
+        if (msg && msg.type === 'sync-request') {
+          try { conn.send({ type: 'sync-data', payload: buildExportData() }); } catch (e) {}
+          $('#syncShareStatus').textContent = 'Data sent ✓';
+        }
+      });
+      conn.on('error', () => {});
+    });
+    syncPeer.on('error', () => { $('#syncShareStatus').textContent = 'Sync connection error.'; });
+  }
+
+  // --- Receive mode: scan a QR, connect to the host, and pull its data. ---
+  function startSyncReceiveScan() {
+    $('#syncPicker').classList.add('hidden');
+    $('#syncReceiveView').classList.remove('hidden');
+    $('#syncReceiveStatus').textContent = '';
+    syncScanner = new Html5Qrcode('syncReader');
+    syncScanner.start(
+      { facingMode: 'environment' },
+      { fps: 10, qrbox: { width: 200, height: 200 } },
+      (decodedText) => {
+        const id = extractSyncId(decodedText);
+        if (!id) return;
+        stopSyncScanner().then(() => receiveSyncData(id, $('#syncReceiveStatus')));
+      },
+      () => {}
+    ).catch(() => { $('#syncReceiveStatus').textContent = 'Camera unavailable.'; });
+  }
+
+  function stopSyncScanner() {
+    const s = syncScanner;
+    syncScanner = null;
+    if (!s) return Promise.resolve();
+    return s.stop().then(() => s.clear()).catch(() => {});
+  }
+
+  // Pull a sync id out of a scanned QR (a full URL) or a bare id.
+  function extractSyncId(text) {
+    if (!text) return '';
+    try {
+      const u = new URL(text);
+      const id = u.searchParams.get('sync');
+      if (id) return id;
+    } catch (e) { /* not a URL */ }
+    return /^sync-[a-z0-9]+$/i.test(text.trim()) ? text.trim() : '';
+  }
+
+  // Connect to a sync host id, request its data, and offer to apply it.
+  function receiveSyncData(hostId, statusEl) {
+    const setStatusText = (t) => { if (statusEl) statusEl.textContent = t; };
+    setStatusText('Connecting…');
+    destroySyncPeer();
+    syncPeer = new Peer(`syncrx-${Math.random().toString(36).slice(2, 10)}`, { debug: 1 });
+    let done = false;
+    const fail = (m) => { if (!done) { done = true; setStatusText(m); } };
+    syncPeer.on('open', () => {
+      const conn = syncPeer.connect(hostId, { reliable: true });
+      conn.on('open', () => { setStatusText('Receiving data…'); try { conn.send({ type: 'sync-request' }); } catch (e) {} });
+      conn.on('data', (msg) => {
+        if (msg && msg.type === 'sync-data') {
+          done = true;
+          const data = normalizeImport(msg.payload);
+          try { conn.close(); } catch (e) {}
+          destroySyncPeer();
+          closeSyncModal();
+          if (!data) { alert('Received data was not valid.'); return; }
+          openImportConfirm(data, 'From another device (over WebRTC)');
+        }
+      });
+      conn.on('error', () => fail('Connection error.'));
+    });
+    syncPeer.on('error', () => fail('Could not reach the other device.'));
+    setTimeout(() => fail('Timed out waiting for the other device.'), 20000);
+  }
+
+  // On page load, if the URL carries a ?sync=<id>, pull that device's data and
+  // show the confirm dialog before replacing anything.
+  function maybeBeginSyncFromUrl() {
+    const id = new URLSearchParams(location.search).get('sync');
+    if (!id) return;
+    receiveSyncData(id);
+  }
+
+  // ======================================================================
   //  HOST SHARE BLOCK (QR + link)
   // ======================================================================
   function renderShareBlock() {
@@ -2154,6 +2565,38 @@
       const input = $('#nameInput');
       if (input) { input.value = ''; input.focus(); }
     });
+
+    // ---- Data export / import / Letterboxd / device sync (settings menu) ----
+    $('#exportDataBtn').addEventListener('click', () => { closeSettingsMenu(); exportMyData(); });
+    $('#importDataBtn').addEventListener('click', () => { closeSettingsMenu(); $('#importFileInput').click(); });
+    $('#importLetterboxdBtn').addEventListener('click', () => { closeSettingsMenu(); $('#letterboxdFileInput').click(); });
+    $('#syncDeviceBtn').addEventListener('click', () => { closeSettingsMenu(); openSyncModal(); });
+
+    $('#importFileInput').addEventListener('change', (e) => {
+      const f = e.target.files && e.target.files[0];
+      importDataFromFile(f);
+      e.target.value = '';   // allow re-importing the same file
+    });
+    $('#letterboxdFileInput').addEventListener('change', (e) => {
+      const f = e.target.files && e.target.files[0];
+      importLetterboxdFromFile(f);
+      e.target.value = '';
+    });
+
+    // Import / sync confirm dialog.
+    $('#cancelImportBtn').addEventListener('click', closeImportConfirm);
+    $('#importConfirmBackdrop').addEventListener('click', closeImportConfirm);
+    $('#confirmImportBtn').addEventListener('click', () => {
+      if (pendingImport) applyImportedData(pendingImport);
+      closeImportConfirm();
+    });
+
+    // Device sync modal.
+    $('#closeSyncBtn').addEventListener('click', closeSyncModal);
+    $('#syncBackdrop').addEventListener('click', closeSyncModal);
+    $('#syncShareBtn').addEventListener('click', startSyncShare);
+    $('#syncReceiveBtn').addEventListener('click', startSyncReceiveScan);
+
     // Click-away closes the settings menu.
     document.addEventListener('click', (e) => {
       if (!$('#settingsWrap').contains(e.target)) closeSettingsMenu();
