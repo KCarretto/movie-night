@@ -2701,11 +2701,9 @@
   let recPrecompute = { sig: null, ranked: null, batches: [] };
   function recSignature() {
     const w    = loadWatched().map((x) => normTitle(x.title) + ':' + (x.rating || 0)).join('|');
-    const noms = state.movies.map((m) => normTitle(m.title)).join('|');
     const hist = loadHistory().length;
-    // Training stores re-rank recs: watchlist (with order), interest levels and
+    // Training stores re-rank recs: interest levels and
     // not-interested marks all reshape the taste vector and candidate set.
-    const wl   = loadWatchlist().map((x) => normTitle(x.title)).join('|');
     const intr = loadInterested().map((x) => normTitle(x.title) + ':' + (x.interest || 0)).join('|');
     const ni   = loadNotInterested().map((x) => normTitle(x.title)).join('|');
     // Group-taste inputs: peers' shared seen lists + their taste vectors, plus
@@ -2716,8 +2714,8 @@
     const pv = (state && state.peerVectors) || {};
     const pvSig = Object.keys(pv).sort().join('|');
     const embReady = window.EMBEDDINGS_BUFFER ? '1' : '0';
-    return MOVIE_DB.length + '#' + w + '#' + noms + '#' + hist
-         + '#' + wl + '#' + intr + '#' + ni
+    return MOVIE_DB.length + '#' + w + '#' + hist
+         + '#' + intr + '#' + ni
          + '#' + seenSig + '#' + pvSig + '#' + embReady;
   }
 
@@ -2761,8 +2759,8 @@
 
   // Ensure the precompute cache matches the current signature, (re)scoring the
   // catalogue once when the signature changes.
-  function ensurePrecompute(sig, profile = null) {
-    if (recPrecompute.sig !== sig) {
+  function ensurePrecompute(sig, profile = null, forceRecompute = false) {
+    if (forceRecompute || recPrecompute.sig !== sig) {
       if (!profile) profile = buildTasteProfile();
       recPrecompute = { sig, ranked: computeRecommendations(MOVIE_DB.length, profile), batches: [] };
     }
@@ -2793,7 +2791,7 @@
     const sig = recSignature();
     if (forceRefresh || recCache.sig !== sig) {
       const profile = buildTasteProfile();
-      const pc = ensurePrecompute(sig, profile);
+      const pc = ensurePrecompute(sig, profile, forceRefresh);
       // Serve a precomputed batch instantly when one is queued; otherwise carve
       // the next batch synchronously.
       const list = pc.batches.length ? pc.batches.shift() : nextRecBatch(pc.ranked, profile);
