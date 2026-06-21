@@ -321,9 +321,14 @@
          ratings; the whole section hides itself when the catalogue is missing
          or the room has left the lobby phase. -->
     <section id="phaseRecommend" class="hidden card p-4 space-y-3">
-      <div class="flex items-center justify-between">
+      <div class="flex items-center justify-between gap-2">
         <h2 class="font-display text-2xl">RECOMMENDED</h2>
-        <span class="rec-subtitle text-xs text-slate-400">Popular &amp; new</span>
+        <div class="flex items-center gap-2">
+          <span class="rec-subtitle text-xs text-slate-400">Popular &amp; new</span>
+          <button id="recRefreshBtn" type="button" class="btn bg-panel2 border border-line text-xs font-semibold px-2.5 py-1.5 rounded-lg" aria-label="Refresh recommendations">
+            <i class="fa-solid fa-rotate-right mr-1"></i>Refresh
+          </button>
+        </div>
       </div>
       <div class="relative">
         <button id="recPrev" type="button" class="rec-nav rec-prev" aria-label="Scroll recommendations left">
@@ -480,7 +485,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.4</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.5</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -685,12 +690,25 @@
   // an orphaned guest looking for a host that no longer exists. We remember the
   // room we host in sessionStorage and resume hosting it after a reload.
   const HOST_ROOM_KEY = 'movieNightHostRoom';
+  const REC_SESSION_SEEN_KEY = 'movieNightRecSeen';
   function rememberHostRoom(id) {
     try { sessionStorage.setItem(HOST_ROOM_KEY, id); } catch (e) {}
   }
   function recallHostRoom() {
     try { return sessionStorage.getItem(HOST_ROOM_KEY) || ''; }
     catch (e) { return ''; }
+  }
+  function loadSeenRecommendations() {
+    try {
+      const raw = JSON.parse(sessionStorage.getItem(REC_SESSION_SEEN_KEY) || '[]');
+      return new Set(Array.isArray(raw) ? raw.map(normTitle).filter(Boolean) : []);
+    } catch (e) {
+      return new Set();
+    }
+  }
+  function saveSeenRecommendations(seenSet) {
+    try { sessionStorage.setItem(REC_SESSION_SEEN_KEY, JSON.stringify([...seenSet])); }
+    catch (e) {}
   }
 
   // ------------------------- Small DOM helpers --------------------------
@@ -1993,7 +2011,7 @@
   // ---------- main entry point ----------
   // Score the whole catalogue (excluding watched + already-nominated titles) and
   // return a blended, ranked list of { movie, score, isNew, personalised } rows.
-  function computeRecommendations() {
+  function computeRecommendations(maxResults = REC_CONFIG.maxResults) {
     if (!MOVIE_DB.length) return [];
     const profile      = buildTasteProfile();
     const personalised = profile.hasSignal;
@@ -2008,23 +2026,34 @@
       candidates.push({ movie: m, score, isNew: isNewMovie(m), personalised });
     }
     candidates.sort((a, b) => b.score - a.score);
-    return blendRecommendations(candidates, REC_CONFIG.maxResults);
+    return blendRecommendations(candidates, maxResults);
   }
 
   // Recommendations only change when the catalogue, the watched/rated list or the
   // current nominations change, so memoise to avoid rescoring on every render.
-  let recCache = { sig: null, list: [], personalised: false };
+  let recCache = { sig: null, list: [], personalised: false, totalAvailable: 0 };
   function recSignature() {
     const w    = loadWatched().map((x) => normTitle(x.title) + ':' + (x.rating || 0)).join('|');
     const noms = state.movies.map((m) => normTitle(m.title)).join('|');
     const hist = loadHistory().length;
     return MOVIE_DB.length + '#' + w + '#' + noms + '#' + hist;
   }
-  function getRecommendations() {
+  function getRecommendations(options = {}) {
+    const forceRefresh = !!options.forceRefresh;
     const sig = recSignature();
-    if (recCache.sig !== sig) {
-      const list = computeRecommendations();
-      recCache = { sig, list, personalised: list.length > 0 && list[0].personalised };
+    if (forceRefresh || recCache.sig !== sig) {
+      const ranked = computeRecommendations(MOVIE_DB.length);
+      const seen = loadSeenRecommendations();
+      const unseen = ranked.filter((rec) => !seen.has(normTitle(rec.movie.title)));
+      const list = unseen.slice(0, REC_CONFIG.maxResults);
+      list.forEach((rec) => seen.add(normTitle(rec.movie.title)));
+      saveSeenRecommendations(seen);
+      recCache = {
+        sig,
+        list,
+        personalised: list.length > 0 && list[0].personalised,
+        totalAvailable: ranked.length,
+      };
     }
     return recCache;
   }
@@ -2054,7 +2083,7 @@
       </div>`;
   }
 
-  function renderRecommendations() {
+  function renderRecommendations(forceRefresh = false) {
     const section = $('#phaseRecommend');
     const track = $('#recTrack');
     const empty = $('#recEmpty');
@@ -2064,7 +2093,7 @@
     // Only relevant while nominating; never show without a catalogue to draw from.
     if (state.phase !== 'lobby' || !MOVIE_DB.length) { section.classList.add('hidden'); return; }
 
-    const { list: recs, personalised } = getRecommendations();
+    const { list: recs, personalised, totalAvailable } = getRecommendations({ forceRefresh });
     section.classList.remove('hidden');
 
     // Update the subtitle to reflect the recommendation mode.
@@ -2072,6 +2101,11 @@
 
     if (!recs.length) {
       track.innerHTML = '';
+      if (empty) {
+        empty.textContent = totalAvailable
+          ? 'You have seen all recommendations for this session.'
+          : 'Rate a few movies in your History to personalise these recommendations.';
+      }
       empty.classList.remove('hidden');
       return;
     }
@@ -2092,8 +2126,10 @@
     const track = $('#recTrack');
     const scrollBy = (dir) => { if (track) track.scrollBy({ left: dir * 320, behavior: 'smooth' }); };
     const prev = $('#recPrev'), next = $('#recNext');
+    const refresh = $('#recRefreshBtn');
     if (prev) prev.addEventListener('click', () => scrollBy(-1));
     if (next) next.addEventListener('click', () => scrollBy(1));
+    if (refresh) refresh.addEventListener('click', () => renderRecommendations(true));
   }
 
   // ---- Phase 2: drag-and-drop / arrow ranking ballot ----
