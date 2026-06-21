@@ -553,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 13</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 14</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -2667,11 +2667,14 @@
     if (bestFav && bestFav.sim < 0.38) { bestFav = null; }
     const drivers = [
       { key: 'group', val: isGroupSession ? (w.groupEmbedding * groupCosineScore) : -Infinity },
-      { key: 'fav',   val: bestFav ? w.groupEmbedding * ((bestFav.sim + 1) / 2) : -Infinity },
+      { key: 'fav',   val: !isGroupSession ? (w.groupEmbedding * groupCosineScore) : -Infinity },
       { key: 'genre', val: w.genre * Math.max(0, gen) },
     ];
     drivers.sort((a, b) => b.val - a.val);
-    if (drivers[0].key === 'fav' && bestFav) return '🍿 ' + bestFav.title;
+    if (drivers[0].key === 'fav') {
+      if (bestFav) return '🍿 ' + bestFav.title;
+      return '✨ Fits your taste profile';
+    }
     if (drivers[0].key === 'genre' && gen > 0) return `✨ Top pick for ${m.primaryGenre || 'Movie'} fans`;
     return isGroupSession ? '👥 Matches group vibe' : '✨ Fits your taste profile';
   }
