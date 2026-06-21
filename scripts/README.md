@@ -42,10 +42,31 @@ python3 scripts/sync.py --pages 25 --output movies.json
 `language` is the primary (original) language as an ISO 639-1 code; the app
 badges non-English films with the matching country flag in the rankings display.
 
+## ML embeddings (`embeddings.json`)
+
+Recommendations are powered by static semantic vectors generated at build time by
+[`generate_embeddings.py`](./generate_embeddings.py) and written to a **separate**
+`embeddings.json` (kept out of `movies.json` so the catalogue stays small and the
+UI renders instantly; the browser lazy-loads the vectors in the background).
+
+```bash
+pip install sentence-transformers   # local backend (default, offline, no key)
+python3 scripts/generate_embeddings.py --movies movies.json --embeddings embeddings.json
+```
+
+- Uses `sentence-transformers/all-MiniLM-L6-v2` (384-dim vectors), with each
+  component rounded to 4 decimal places to slash the JSON text size.
+- `embeddings.json` is a flat `{ "<movie-key>": [floats…] }` map, keyed by the
+  movie's `id` when present, otherwise a normalised title.
+- Resumes by default: movies already present in `embeddings.json` are skipped so
+  repeated runs only embed newly added titles.
+- Pass `--backend openai` (with `OPENAI_API_KEY`) to use OpenAI embeddings instead.
+
 ## Automating it
 
 `.github/workflows/sync-movies.yml` runs this script twice a day (10:00 and
 22:00 UTC, or on demand from the Actions tab). It downloads and unzips TMDB's
 daily id export, runs `sync.py` to import those ids and discover 500 pages of
-movies, and commits any changes to `movies.json` on `main`. Add `TMDB_API_KEY`
+movies, then runs `generate_embeddings.py` for any new titles, and commits any
+changes to `movies.json` and `embeddings.json` on `main`. Add `TMDB_API_KEY`
 (and optionally `OMDB_API_KEY`) as repository secrets to enable it.
