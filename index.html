@@ -2506,8 +2506,7 @@
   }
 
   // ---------- candidate scoring ----------
-  // Given a catalogue entry and a taste profile, return { score, why } where
-  // `why` is a short human-readable justification for the carousel badge.
+  // Given a catalogue entry and a taste profile, return the score.
   // Year-agnostic — recency is handled by the blend step so vintage classics that
   // perfectly match the viewer's taste are never unfairly buried.
   function scoreCandidate(m, profile) {
@@ -2544,8 +2543,19 @@
       score -= 0.5 * dislikeAlign;
     }
 
-    // Identify the dominant scoring factor for an explainable badge. Find the
-    // single past favourite whose embedding best matches this candidate.
+    return score;
+  }
+
+  // Identify the dominant scoring factor for an explainable badge. Find the
+  // single past favourite whose embedding best matches this candidate.
+  // Calculated on-demand for final selected recommendation batches.
+  function computeRecommendationWhy(m, profile) {
+    const w   = REC_CONFIG.weights;
+    const genres = movieGenres(m);
+    const gen = genres.reduce((s, g) => s + (profile.genreWeights.get(g) || 0), 0) / Math.sqrt(genres.length || 1);
+    const groupCosineScore = groupVibeScore(m, profile);
+    const emb = movieEmbedding(m);
+
     let bestFav = null;
     if (emb && profile.positiveSamples && profile.positiveSamples.length) {
       for (const sample of profile.positiveSamples) {
@@ -2559,12 +2569,9 @@
       { key: 'genre', val: w.genre * Math.max(0, gen) },
     ];
     drivers.sort((a, b) => b.val - a.val);
-    let why;
-    if (drivers[0].key === 'fav' && bestFav) why = '🍿 ' + bestFav.title;
-    else if (drivers[0].key === 'genre' && gen > 0) why = '✨ Fits your genre tastes';
-    else why = '👥 Matches group vibe';
-
-    return { score, why };
+    if (drivers[0].key === 'fav' && bestFav) return '🍿 ' + bestFav.title;
+    if (drivers[0].key === 'genre' && gen > 0) return '✨ Fits your genre tastes';
+    return '👥 Matches group vibe';
   }
 
   // Cold-start score: quality + small recency boost; no personalisation.
@@ -2626,9 +2633,9 @@
   // ---------- main entry point ----------
   // Score the whole catalogue (excluding watched + already-nominated titles) and
   // return a blended, ranked list of { movie, score, why, isNew, personalised } rows.
-  function computeRecommendations(maxResults = REC_CONFIG.maxResults) {
+  function computeRecommendations(maxResults = REC_CONFIG.maxResults, profile = null) {
     if (!MOVIE_DB.length) return [];
-    const profile      = buildTasteProfile();
+    if (!profile) profile = buildTasteProfile();
     const personalised = profile.hasSignal;
     // "Seen It" filter: drop any title that ANY participant (local user or any
     // peer) has already watched/seen, so the room only weighs movies that are
@@ -2646,9 +2653,7 @@
       if (seenSet.has(nt) || nominatedSet.has(nt) || skipSet.has(nt)) continue;
       let score, why = null;
       if (personalised) {
-        const res = scoreCandidate(m, profile);
-        score = res.score;
-        why = res.why;
+        score = scoreCandidate(m, profile);
       } else {
         score = coldStartScore(m);
       }
@@ -2707,7 +2712,7 @@
   // seen for this session so subsequent batches don't repeat them. Reserves a
   // few slots for watchlist titles so saved movies are periodically injected
   // into the active feed rather than relying purely on their organic rank.
-  function nextRecBatch(ranked) {
+  function nextRecBatch(ranked, profile = null) {
     const seen = loadSeenRecommendations();
     const unseen = ranked.filter((rec) => !seen.has(normTitle(rec.movie.title)));
     const reserve = Math.max(1, Math.round(REC_CONFIG.maxResults * REC_CONFIG.watchlistInjectFraction));
@@ -2729,14 +2734,24 @@
     const final = batch.slice(0, REC_CONFIG.maxResults);
     final.forEach((rec) => seen.add(normTitle(rec.movie.title)));
     saveSeenRecommendations(seen);
+
+    // Compute 'why' only for the final recommendations in this batch
+    if (profile === null) profile = buildTasteProfile();
+    final.forEach((rec) => {
+      if (!rec.why && rec.personalised) {
+        rec.why = computeRecommendationWhy(rec.movie, profile);
+      }
+    });
+
     return final;
   }
 
   // Ensure the precompute cache matches the current signature, (re)scoring the
   // catalogue once when the signature changes.
-  function ensurePrecompute(sig) {
+  function ensurePrecompute(sig, profile = null) {
     if (recPrecompute.sig !== sig) {
-      recPrecompute = { sig, ranked: computeRecommendations(MOVIE_DB.length), batches: [] };
+      if (!profile) profile = buildTasteProfile();
+      recPrecompute = { sig, ranked: computeRecommendations(MOVIE_DB.length, profile), batches: [] };
     }
     return recPrecompute;
   }
@@ -2745,9 +2760,10 @@
   // renders from a ready queue instead of blocking on a fresh scoring pass.
   function precomputeRecBatches(count = 2) {
     const sig = recSignature();
-    const pc = ensurePrecompute(sig);
+    const profile = buildTasteProfile();
+    const pc = ensurePrecompute(sig, profile);
     while (pc.batches.length < count) {
-      const batch = nextRecBatch(pc.ranked);
+      const batch = nextRecBatch(pc.ranked, profile);
       if (!batch.length) break;       // exhausted the unseen catalogue
       pc.batches.push(batch);
     }
@@ -2763,10 +2779,11 @@
     const forceRefresh = !!options.forceRefresh;
     const sig = recSignature();
     if (forceRefresh || recCache.sig !== sig) {
-      const pc = ensurePrecompute(sig);
+      const profile = buildTasteProfile();
+      const pc = ensurePrecompute(sig, profile);
       // Serve a precomputed batch instantly when one is queued; otherwise carve
       // the next batch synchronously.
-      const list = pc.batches.length ? pc.batches.shift() : nextRecBatch(pc.ranked);
+      const list = pc.batches.length ? pc.batches.shift() : nextRecBatch(pc.ranked, profile);
       recCache = {
         sig,
         list,
