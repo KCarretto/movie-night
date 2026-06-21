@@ -272,7 +272,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.1</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.2</b>
   </footer>
 
   <!-- ===================== START-VOTING CONFIRM MODAL ===================== -->
@@ -312,8 +312,50 @@
   // ----------------------------- Constants ------------------------------
   const MAX_PEERS = 6;          // including host
   const MAX_NOMINATIONS = 3;    // movies per person
-  const ROOM_ID_LEN = 6;
   const MAX_NAME_LEN = 24;      // display-name character cap
+
+  // ---- Fun movie-themed room codes ----------------------------------------
+  // Room codes read like a little movie tagline: <adjective>-<noun>-<NN>,
+  // e.g. "epic-popcorn-42". Lowercase words are joined by hyphens (never
+  // spaces). With 50 adjectives x 50 nouns x 100 numbers there are 250,000
+  // possible combinations (well over the 100,000 minimum).
+  const ROOM_ADJECTIVES = [
+    'epic', 'silent', 'classic', 'noir', 'technicolor', 'blockbuster', 'indie',
+    'animated', 'cult', 'golden', 'dramatic', 'comic', 'action', 'vintage',
+    'surreal', 'gritty', 'dreamy', 'cosmic', 'retro', 'starry', 'matinee',
+    'primetime', 'widescreen', 'cinematic', 'iconic', 'legendary', 'spooky',
+    'romantic', 'thrilling', 'suspenseful', 'musical', 'western', 'futuristic', 'heroic',
+    'mysterious', 'whimsical', 'dazzling', 'breezy', 'campy', 'glossy', 'moody',
+    'snappy', 'sparkly', 'twisty', 'velvet', 'silver', 'midnight', 'sunny',
+    'cozy', 'electric',
+  ];
+  const ROOM_NOUNS = [
+    'popcorn', 'reel', 'director', 'marquee', 'trailer', 'cameo', 'sequel',
+    'oscar', 'screenplay', 'soundtrack', 'premiere', 'credits', 'projector',
+    'screening', 'montage', 'closeup', 'cliffhanger', 'blooper', 'matinee',
+    'usher', 'ticket', 'reboot', 'spotlight', 'curtain', 'backlot', 'studio',
+    'cinema', 'theater', 'auteur', 'gaffer', 'stuntman', 'sidekick', 'villain',
+    'protagonist', 'closeups', 'storyboard', 'flashback', 'epilogue', 'prologue',
+    'intermission', 'lobbycard', 'boxoffice', 'nickelodeon', 'newsreel', 'overture',
+    'encore', 'clapboard', 'dolly', 'boommic', 'genre',
+  ];
+
+  // Pick a fun, movie-themed room code: adjective-noun-NN.
+  function randomRoomId() {
+    const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+    const num = String(Math.floor(Math.random() * 100)).padStart(2, '0');
+    return `${pick(ROOM_ADJECTIVES)}-${pick(ROOM_NOUNS)}-${num}`;
+  }
+
+  // Normalize a room code from a URL / QR / saved value into the canonical
+  // form: lowercase, only [a-z0-9-], no leading/trailing or doubled hyphens.
+  function normalizeRoomId(raw) {
+    return String(raw || '')
+      .toLowerCase()
+      .replace(/[^a-z0-9-]/g, '')
+      .replace(/-+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
 
   // 100 fun/cute nicknames used as default placeholders for participants.
   const FUN_NAMES = [
@@ -415,14 +457,14 @@
     const urlRoom = params.get('room');
     const hostRoom = recallHostRoom();
 
-    if (urlRoom && urlRoom.toUpperCase() === hostRoom) {
+    if (urlRoom && normalizeRoomId(urlRoom) === hostRoom) {
       // We were hosting this room and just reloaded — resume as host.
       isHost = true;
       roomId = hostRoom;
       startHost();
     } else if (urlRoom) {
       isHost = false;
-      roomId = urlRoom.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, ROOM_ID_LEN);
+      roomId = normalizeRoomId(urlRoom);
       startGuest();
     } else {
       isHost = true;
@@ -436,13 +478,6 @@
 
     $('#roomIdLabel').textContent = roomId;
     wireUiEvents();
-  }
-
-  function randomRoomId() {
-    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars
-    let s = '';
-    for (let i = 0; i < ROOM_ID_LEN; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
-    return s;
   }
 
   // ======================================================================
