@@ -14,6 +14,8 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <!-- html5-qrcode: in-app camera QR scanner (fallback join method) -->
   <script src="https://unpkg.com/html5-qrcode"></script>
+  <!-- Font Awesome: button & action icons (trash, gear, dice, etc.) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
 
   <script>
     // Configure Tailwind theme tokens for our cinematic dark palette.
@@ -115,6 +117,21 @@
 
     /* Settings cog dropdown menu */
     .menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 160px; z-index: 40; }
+
+    /* Typeahead suggestion dropdown for the movie nomination input. */
+    .typeahead { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 45;
+      max-height: 320px; overflow-y: auto; }
+    .ta-item { cursor: pointer; }
+    .ta-item:hover, .ta-item.active { background: #1c212d; }
+    /* Poster thumbnails (recommendations / history). Fallback gradient shows
+       through if the <img> fails to load. */
+    .poster { background: linear-gradient(135deg,#2a3242,#141821); object-fit: cover; }
+
+    /* "Seen by" hover tooltip on the 👀 indicator. */
+    .seen-wrap { position: relative; }
+    .seen-pop { position: absolute; right: 0; top: calc(100% + 6px); min-width: 180px; z-index: 50;
+      display: none; }
+    .seen-wrap:hover .seen-pop, .seen-wrap.open .seen-pop { display: block; }
   </style>
 </head>
 
@@ -134,10 +151,19 @@
         <span id="netDot" class="dot pulse" style="background:#ffce4d"></span>
         <span id="netText" class="font-medium">Booting…</span>
       </div>
+      <!-- Toggle between the live room and the personal history view. -->
+      <button id="historyBtn" type="button" title="Movie night history"
+              aria-label="Movie night history"
+              class="btn w-9 h-9 rounded-lg bg-panel2 border border-line flex items-center justify-center text-slate-300">
+        <i class="fa-solid fa-clock-rotate-left"></i>
+      </button>
     </div>
   </header>
 
   <main class="max-w-3xl mx-auto px-4 py-5 pb-24 space-y-5">
+
+    <!-- ============ VIEW: live room (nominate / vote / results) ============ -->
+    <div id="viewMain" class="space-y-5">
 
     <!-- ===================== ROOM / CONNECTION BAR ===================== -->
     <section class="card p-4">
@@ -162,7 +188,7 @@
           <div id="settingsWrap" class="hidden relative">
             <button id="settingsBtn" type="button" aria-haspopup="true" aria-expanded="false"
                     class="btn w-8 h-8 rounded-lg bg-panel2 border border-line flex items-center justify-center text-slate-300"
-                    title="Settings">⚙️</button>
+                    title="Settings"><i class="fa-solid fa-gear"></i></button>
             <div id="settingsMenu" class="menu hidden card p-1">
               <button id="changeNameBtn" type="button"
                       class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2">Change name</button>
@@ -182,7 +208,7 @@
                  class="flex-1 min-w-0 bg-ink border border-line rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent2" />
           <button id="randomNameBtn" type="button" title="Roll a random name"
                   aria-label="Roll a random name"
-                  class="btn bg-panel2 border border-line text-base px-3 py-2 rounded-lg leading-none">🎲</button>
+                  class="btn bg-panel2 border border-line text-base px-3 py-2 rounded-lg leading-none"><i class="fa-solid fa-dice"></i></button>
           <button id="saveNameBtn" type="submit" class="btn btn-accent2 text-white text-sm font-semibold px-3 py-2 rounded-lg">Save</button>
         </form>
         <p id="nameMsg" class="text-xs text-slate-500 mt-1 h-4"></p>
@@ -197,7 +223,7 @@
           <p class="text-sm text-slate-300">Scan to join on the same Wi‑Fi, or share the link:</p>
           <div class="flex gap-2">
             <input id="shareLink" readonly class="flex-1 min-w-0 bg-ink border border-line rounded-lg px-3 py-2 text-xs" />
-            <button id="copyLinkBtn" class="btn btn-accent2 text-white text-sm font-semibold px-3 py-2 rounded-lg">Copy</button>
+            <button id="copyLinkBtn" class="btn btn-accent2 text-white text-sm font-semibold px-3 py-2 rounded-lg"><i class="fa-solid fa-copy mr-1"></i>Copy</button>
           </div>
           <p id="copyMsg" class="text-xs text-emerald-400 h-4"></p>
         </div>
@@ -205,7 +231,7 @@
 
       <!-- Guest-side in-app scanner fallback (for the very first join). -->
       <div id="scanBlock" class="hidden mt-4">
-        <button id="openScanBtn" class="btn btn-accent2 text-white text-sm font-semibold px-3 py-2 rounded-lg w-full">📷 Scan a room QR code</button>
+        <button id="openScanBtn" class="btn btn-accent2 text-white text-sm font-semibold px-3 py-2 rounded-lg w-full"><i class="fa-solid fa-camera mr-2"></i>Scan a room QR code</button>
         <div id="scannerWrap" class="hidden mt-3">
           <div id="reader" class="rounded-xl overflow-hidden"></div>
           <button id="closeScanBtn" class="btn mt-2 text-sm px-3 py-2 rounded-lg bg-panel2 border border-line w-full">Cancel</button>
@@ -229,10 +255,17 @@
         <span class="text-xs text-slate-400">Pick up to 3 movies</span>
       </div>
 
-      <form id="nominateForm" class="flex gap-2">
-        <input id="movieInput" maxlength="80" placeholder="Add a movie title…"
-               class="flex-1 min-w-0 bg-ink border border-line rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-accent2" />
-        <button id="addMovieBtn" type="submit" class="btn btn-primary text-white font-semibold px-4 py-2.5 rounded-lg">Add</button>
+      <form id="nominateForm" class="relative flex gap-2">
+        <div class="relative flex-1 min-w-0">
+          <input id="movieInput" maxlength="80" placeholder="Add a movie title…" autocomplete="off"
+                 aria-autocomplete="list" aria-expanded="false" role="combobox"
+                 class="w-full bg-ink border border-line rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-accent2" />
+          <!-- Typeahead suggestions sourced from movies.json. -->
+          <div id="movieSuggest" class="typeahead hidden card p-1" role="listbox"></div>
+        </div>
+        <button id="addMovieBtn" type="submit" class="btn btn-primary text-white font-semibold px-4 py-2.5 rounded-lg">
+          <i class="fa-solid fa-plus mr-1"></i>Add
+        </button>
       </form>
       <p id="nominateMsg" class="text-xs text-slate-400 -mt-2"></p>
 
@@ -248,7 +281,7 @@
 
       <!-- Host-only control to advance the whole room to voting. -->
       <button id="lockBtn" class="hidden btn btn-accent2 text-white font-semibold w-full py-3 rounded-xl">
-        🔒 Lock Nominations & Start Voting
+        <i class="fa-solid fa-lock mr-2"></i>Lock Nominations &amp; Start Voting
       </button>
       <p id="lockHint" class="hidden text-center text-xs text-slate-500">Waiting for the host to start voting…</p>
     </section>
@@ -288,12 +321,51 @@
         <div id="rounds" class="space-y-3"></div>
       </div>
 
-      <button id="restartBtn" class="hidden btn btn-accent2 text-white font-semibold w-full py-3 rounded-xl">🔁 New Round (Host)</button>
+      <!-- Mark what the group actually watched (saved to this browser's history
+           and personal watched list, with an optional star rating). -->
+      <div id="watchedBox" class="rounded-lg border border-line bg-ink p-3">
+        <div class="text-[11px] uppercase tracking-wider text-slate-400 mb-2">Did you watch the winner?</div>
+        <div class="flex flex-wrap items-center gap-2">
+          <button id="markWatchedBtn" class="btn btn-accent2 text-white text-sm font-semibold px-3 py-2 rounded-lg">
+            <i class="fa-solid fa-circle-check mr-1"></i>Mark winner as watched
+          </button>
+          <div id="resultsStars" class="rating-stars text-xl text-slate-600" data-title="" aria-label="Rate the winner"></div>
+          <span id="watchedMsg" class="text-xs text-emerald-400"></span>
+        </div>
+      </div>
+
+      <button id="restartBtn" class="hidden btn btn-accent2 text-white font-semibold w-full py-3 rounded-xl"><i class="fa-solid fa-rotate-right mr-2"></i>New Round (Host)</button>
+    </section>
+
+    </div><!-- /#viewMain -->
+
+    <!-- ============ VIEW: personal movie-night history ============ -->
+    <section id="viewHistory" class="hidden space-y-5">
+      <div class="card p-4 space-y-4">
+        <div class="flex items-center justify-between">
+          <h2 class="font-display text-2xl">YOUR MOVIE NIGHTS</h2>
+          <button id="backToRoomBtn" class="btn bg-panel2 border border-line text-sm font-semibold px-3 py-2 rounded-lg">
+            <i class="fa-solid fa-arrow-left mr-1"></i>Back to room
+          </button>
+        </div>
+        <p class="text-xs text-slate-500 -mt-2">
+          Saved only in this browser. A history entry is recorded each time results are shown.
+        </p>
+        <div id="historyList" class="space-y-3"></div>
+        <p id="historyEmpty" class="text-sm text-slate-500 italic">No movie nights recorded yet.</p>
+      </div>
+
+      <div class="card p-4 space-y-3">
+        <h2 class="font-display text-2xl">MOVIES YOU'VE WATCHED</h2>
+        <p class="text-xs text-slate-500 -mt-1">Your ratings are shared with the room so others can see what you thought.</p>
+        <div id="watchedList" class="space-y-2"></div>
+        <p id="watchedEmpty" class="text-sm text-slate-500 italic">You haven't marked any movies as watched yet.</p>
+      </div>
     </section>
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.5</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.6</b>
   </footer>
 
   <!-- ===================== START-VOTING CONFIRM MODAL ===================== -->
@@ -458,6 +530,130 @@
   const el = (tag, cls) => { const n = document.createElement(tag); if (cls) n.className = cls; return n; };
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const normTitle = (s) => String(s || '').trim().toLowerCase();
+
+  // ======================================================================
+  //  MOVIE RECOMMENDATION DATABASE (movies.json, loaded once at startup)
+  // ======================================================================
+  // The catalogue is generated at build time by scripts/generate_movies.py
+  // and served as a static asset, keeping the app fully serverless. Each entry:
+  // { title, year, primaryGenre, genres[], description, art, ratings:{...} }.
+  let MOVIE_DB = [];
+  const movieByTitle = new Map();   // normalized title -> db entry
+
+  function indexMovieDb() {
+    movieByTitle.clear();
+    MOVIE_DB.forEach((m) => { if (m && m.title) movieByTitle.set(normTitle(m.title), m); });
+  }
+
+  async function loadMovieDb() {
+    try {
+      const res = await fetch('movies.json', { cache: 'no-cache' });
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      const data = await res.json();
+      MOVIE_DB = Array.isArray(data) ? data : (data.movies || []);
+    } catch (e) {
+      // Recommendations are a progressive enhancement: the app still works for
+      // freeform titles if the catalogue can't be fetched (e.g. file://).
+      MOVIE_DB = [];
+      console.warn('Could not load movies.json:', e);
+    }
+    indexMovieDb();
+    if (typeof renderAll === 'function') renderAll();
+  }
+
+  // ======================================================================
+  //  LOCAL PERSISTENCE — vote history + personal watched movies
+  // ======================================================================
+  // Both live in localStorage and never leave this browser, except that watched
+  // titles+ratings are shared with the room (so peers see who's seen what).
+  const HISTORY_KEY = 'movieNightHistory';
+  const WATCHED_KEY = 'movieNightWatched';
+
+  function loadJson(key, fallback) {
+    try { const v = JSON.parse(localStorage.getItem(key) || 'null'); return v == null ? fallback : v; }
+    catch (e) { return fallback; }
+  }
+  function saveJson(key, value) {
+    try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* storage may be full/unavailable */ }
+  }
+
+  function loadHistory() { const v = loadJson(HISTORY_KEY, []); return Array.isArray(v) ? v : []; }
+  function saveHistory(list) { saveJson(HISTORY_KEY, list); }
+
+  // Watched list: [{ title, rating (0-5, 0 = unrated), watchedAt }].
+  function loadWatched() { const v = loadJson(WATCHED_KEY, []); return Array.isArray(v) ? v : []; }
+  function saveWatched(list) { saveJson(WATCHED_KEY, list); }
+  function findWatched(title) { return loadWatched().find((w) => normTitle(w.title) === normTitle(title)); }
+
+  // Add or update a watched movie (and its rating), then re-share with peers.
+  function upsertWatched(title, rating) {
+    const clean = String(title || '').trim();
+    if (!clean) return;
+    const list = loadWatched();
+    const existing = list.find((w) => normTitle(w.title) === normTitle(clean));
+    if (existing) {
+      if (rating != null) existing.rating = rating;
+    } else {
+      list.push({ title: clean, rating: rating || 0, watchedAt: Date.now() });
+    }
+    saveWatched(list);
+    shareSeen();
+  }
+
+  // Snapshot of my watched movies shared with the room as { title, rating }.
+  function mySeenShare() {
+    return loadWatched().map((w) => ({ title: w.title, rating: w.rating || 0 }));
+  }
+  function shareSeen() {
+    dispatch({ type: 'setSeen', seen: mySeenShare() });
+    renderAll();
+  }
+
+  // Gather everyone (by display name) who has seen a given title, with rating.
+  function seenByForTitle(title) {
+    const out = [];
+    const seen = state.seen || {};
+    state.peers.forEach((p) => {
+      const list = seen[p.id];
+      if (!Array.isArray(list)) return;
+      const hit = list.find((s) => normTitle(s.title) === normTitle(title));
+      if (hit) out.push({ name: p.name, rating: hit.rating || 0 });
+    });
+    return out;
+  }
+  const starString = (n) => {
+    const filled = Math.max(0, Math.min(5, Math.round(n || 0)));
+    return '★'.repeat(filled) + '☆'.repeat(5 - filled);
+  };
+
+  // 👀 "seen by" indicator markup. Empty string when nobody in the room has
+  // watched the title. The tooltip lists each viewer and their star rating.
+  function seenIndicatorHtml(title) {
+    const seers = seenByForTitle(title);
+    if (!seers.length) return '';
+    const rows = seers.map((s) => `
+      <div class="flex items-center justify-between gap-3 text-xs px-1 py-0.5">
+        <span class="truncate">${escapeHtml(s.name)}</span>
+        <span class="text-gold whitespace-nowrap">${s.rating ? escapeHtml(starString(s.rating)) : '<span class=\'text-slate-500\'>unrated</span>'}</span>
+      </div>`).join('');
+    return `
+      <span class="seen-wrap inline-flex items-center" tabindex="0"
+            title="Seen by ${escapeHtml(seers.map((s) => s.name).join(', '))}">
+        <i class="fa-solid fa-eye text-accent2 cursor-pointer" aria-label="Already seen"></i>
+        <span class="seen-pop card p-2">
+          <div class="text-[10px] uppercase tracking-wider text-slate-400 px-1 mb-1">Seen by</div>
+          ${rows}
+        </span>
+      </span>`;
+  }
+  // Click toggles the tooltip open (for touch devices); hover handles desktop.
+  function wireSeenIndicator(root) {
+    root.querySelectorAll('.seen-wrap').forEach((w) => {
+      w.addEventListener('click', (e) => { e.stopPropagation(); w.classList.toggle('open'); });
+    });
+  }
+
 
   // ----------------------------- App globals ----------------------------
   let peer = null;                 // PeerJS instance
@@ -477,6 +673,7 @@
     movies: [],                  // [{ id, title, by }]
     votes: {},                   // peerId -> [movieId, movieId, ...] ranked
     results: null,               // computed instant-runoff result (set in results phase)
+    seen: {},                    // peerId -> [{ title, rating }] watched-movie shares
   };
 
   // ======================================================================
@@ -508,6 +705,7 @@
 
     $('#roomIdLabel').textContent = roomId;
     wireUiEvents();
+    loadMovieDb();   // fetch the recommendation catalogue (progressive enhancement)
   }
 
   // ======================================================================
@@ -527,6 +725,10 @@
       $('#youLabel').textContent = myName;
       setStatus('ok', `Hosting · 1/${MAX_PEERS}`);
       renderShareBlock();
+      renderAll();
+      // Register the host's own watched movies into the shared seen map.
+      if (state.seen) state.seen[id] = mySeenShare();
+      else state.seen = { [id]: mySeenShare() };
       renderAll();
     });
 
@@ -568,6 +770,8 @@
     setupConnection(conn, () => {
       // Introduce ourselves once the channel is open (with any saved name).
       safeSend(conn, { type: 'join', name: loadSavedName() });
+      // Share which movies we've already watched so the room can flag them.
+      safeSend(conn, { type: 'action', action: { type: 'setSeen', seen: mySeenShare() } });
     });
   }
 
@@ -676,6 +880,7 @@
     const before = state.peers.length;
     state.peers = state.peers.filter((p) => p.id !== peerId);
     delete state.votes[peerId];
+    if (state.seen) delete state.seen[peerId];
     if (state.peers.length !== before) {
       broadcastDirectory();
       // If we were waiting on this peer's vote, results may now be ready.
@@ -814,6 +1019,19 @@
         // Avoid collisions with another participant's name.
         if (state.peers.some((p) => p.id !== fromId && p.name === cleaned)) return;
         target.name = cleaned;
+        break;
+      }
+
+      case 'setSeen': {
+        // A peer shares the movies they've watched (title + rating) so the room
+        // can flag recommendations others have already seen.
+        if (!state.peers.some((p) => p.id === fromId)) return;
+        const list = Array.isArray(action.seen) ? action.seen : [];
+        if (!state.seen) state.seen = {};
+        state.seen[fromId] = list
+          .filter((s) => s && typeof s.title === 'string')
+          .slice(0, 500)
+          .map((s) => ({ title: String(s.title).slice(0, 120), rating: Number(s.rating) || 0 }));
         break;
       }
     }
@@ -991,6 +1209,10 @@
     renderBallotIfNeeded();
     renderVoteProgress();
     renderResults();
+    // Allow the next results set to be recorded fresh once we leave results.
+    if (state.phase !== 'results') lastRecordedSig = null;
+    // Keep the history view live (e.g. as peers share newly-seen movies).
+    if (currentView === 'history') renderHistory();
   }
 
   // Keep the name input's placeholder in sync, and toggle between the inline
@@ -1095,13 +1317,15 @@
       li.innerHTML = `
         <span class="font-display text-xl text-slate-500 w-6 text-center">${i + 1}</span>
         <span class="flex-1 text-sm font-medium truncate">${escapeHtml(m.title)}</span>
+        ${seenIndicatorHtml(m.title)}
         <span class="text-[10px] text-slate-500">by ${escapeHtml(who)}</span>
         ${mineMovie && canEdit
-          ? `<button class="remove-movie btn w-7 h-7 rounded bg-ink border border-line text-sm leading-none text-slate-400 hover:text-accent" aria-label="Remove movie" title="Remove">🗑️</button>`
+          ? `<button class="remove-movie btn w-7 h-7 rounded bg-ink border border-line text-sm leading-none text-slate-400 hover:text-accent" aria-label="Remove movie" title="Remove"><i class="fa-solid fa-trash"></i></button>`
           : ''}`;
       if (mineMovie && canEdit) {
         li.querySelector('.remove-movie').onclick = () => dispatch({ type: 'removeNomination', movieId: m.id });
       }
+      wireSeenIndicator(li);
       list.appendChild(li);
     });
 
@@ -1120,6 +1344,113 @@
     $('#nominateMsg').textContent = left > 0
       ? `You can add ${left} more movie${left === 1 ? '' : 's'}.`
       : 'You have used all of your nominations.';
+  }
+
+  // ======================================================================
+  //  TYPEAHEAD — prefill the nomination input from the recommendation DB
+  // ======================================================================
+  // Freeform titles are always allowed; the typeahead is purely a convenience
+  // that surfaces matching catalogue entries (with art, genre, ratings and the
+  // 👀 seen indicator) as the user types.
+  const MAX_SUGGESTIONS = 8;
+  let taMatches = [];      // current suggestion list
+  let taActive = -1;       // highlighted index for keyboard nav
+
+  function searchMovies(query) {
+    const q = normTitle(query);
+    if (!q) return [];
+    const starts = [];
+    const contains = [];
+    for (const m of MOVIE_DB) {
+      const t = normTitle(m.title);
+      if (t.startsWith(q)) starts.push(m);
+      else if (t.includes(q) || (m.primaryGenre || '').toLowerCase().includes(q)) contains.push(m);
+      if (starts.length >= MAX_SUGGESTIONS) break;
+    }
+    return starts.concat(contains).slice(0, MAX_SUGGESTIONS);
+  }
+
+  function ratingsLine(m) {
+    const r = (m && m.ratings) || {};
+    const bits = [];
+    if (r.imdb != null) bits.push(`<span title="IMDb"><i class="fa-brands fa-imdb text-gold"></i> ${escapeHtml(String(r.imdb))}</span>`);
+    if (r.rottenTomatoes != null) bits.push(`<span title="Rotten Tomatoes">🍅 ${escapeHtml(String(r.rottenTomatoes))}%</span>`);
+    if (r.letterboxd != null) bits.push(`<span title="Letterboxd (estimated)">📊 ${escapeHtml(String(r.letterboxd))}</span>`);
+    return bits.join(' · ');
+  }
+
+  function posterHtml(m, sizeCls) {
+    const letter = escapeHtml((m.title || '?').charAt(0).toUpperCase());
+    const cls = `poster ${sizeCls} rounded flex items-center justify-center text-slate-500 font-display text-lg shrink-0`;
+    if (m.art) {
+      return `<img src="${escapeHtml(m.art)}" alt="" class="${cls}"
+        onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'${cls}',textContent:'${letter}'}))" />`;
+    }
+    return `<div class="${cls}">${letter}</div>`;
+  }
+
+  function renderSuggestions() {
+    const box = $('#movieSuggest');
+    if (!box) return;
+    if (!taMatches.length) { closeSuggestions(); return; }
+    box.innerHTML = taMatches.map((m, i) => `
+      <div class="ta-item ${i === taActive ? 'active' : ''} flex items-center gap-2 px-2 py-1.5 rounded-lg" role="option" data-i="${i}">
+        ${posterHtml(m, 'w-9 h-12')}
+        <div class="min-w-0 flex-1">
+          <div class="text-sm font-medium truncate">${escapeHtml(m.title)}${m.year ? ` <span class="text-slate-500">(${escapeHtml(String(m.year))})</span>` : ''} ${seenIndicatorHtml(m.title)}</div>
+          <div class="text-[11px] text-slate-400 truncate">${escapeHtml(m.primaryGenre || '')}${ratingsLine(m) ? ' · ' + ratingsLine(m) : ''}</div>
+        </div>
+      </div>`).join('');
+    box.classList.remove('hidden');
+    $('#movieInput').setAttribute('aria-expanded', 'true');
+    box.querySelectorAll('.ta-item').forEach((node) => {
+      node.addEventListener('mousedown', (e) => {     // mousedown beats input blur
+        e.preventDefault();
+        chooseSuggestion(Number(node.dataset.i));
+      });
+    });
+    wireSeenIndicator(box);
+  }
+
+  function closeSuggestions() {
+    const box = $('#movieSuggest');
+    if (!box) return;
+    box.classList.add('hidden');
+    box.innerHTML = '';
+    taMatches = [];
+    taActive = -1;
+    const input = $('#movieInput');
+    if (input) input.setAttribute('aria-expanded', 'false');
+  }
+
+  function chooseSuggestion(i) {
+    const m = taMatches[i];
+    if (!m) return;
+    const input = $('#movieInput');
+    input.value = m.title;
+    closeSuggestions();
+    input.focus();
+  }
+
+  function wireTypeahead() {
+    const input = $('#movieInput');
+    if (!input) return;
+    input.addEventListener('input', () => {
+      taMatches = searchMovies(input.value);
+      taActive = -1;
+      renderSuggestions();
+    });
+    input.addEventListener('keydown', (e) => {
+      if (!taMatches.length) return;
+      if (e.key === 'ArrowDown') { e.preventDefault(); taActive = (taActive + 1) % taMatches.length; renderSuggestions(); }
+      else if (e.key === 'ArrowUp') { e.preventDefault(); taActive = (taActive - 1 + taMatches.length) % taMatches.length; renderSuggestions(); }
+      else if (e.key === 'Enter' && taActive >= 0) { e.preventDefault(); chooseSuggestion(taActive); }
+      else if (e.key === 'Escape') { closeSuggestions(); }
+    });
+    input.addEventListener('blur', () => setTimeout(closeSuggestions, 120));
+    input.addEventListener('focus', () => {
+      if (input.value.trim()) { taMatches = searchMovies(input.value); renderSuggestions(); }
+    });
   }
 
   // ---- Phase 2: drag-and-drop / arrow ranking ballot ----
@@ -1418,6 +1749,192 @@
     });
 
     if (r.winnerTitle) celebrate();
+
+    // Persist this movie night to local history and refresh the "watched" UI.
+    recordHistory();
+    renderResultsWatched();
+  }
+
+  // ======================================================================
+  //  RESULTS: "mark winner as watched" + star rating
+  // ======================================================================
+  function renderResultsWatched() {
+    const box = $('#watchedBox');
+    if (!box) return;
+    const winner = state.results && state.results.winnerTitle;
+    box.classList.toggle('hidden', !winner);
+    if (!winner) return;
+    const w = findWatched(winner);
+    const btn = $('#markWatchedBtn');
+    btn.innerHTML = w
+      ? '<i class="fa-solid fa-circle-check mr-1"></i>Watched ✓'
+      : '<i class="fa-regular fa-circle-check mr-1"></i>Mark winner as watched';
+    btn.classList.toggle('opacity-60', !!w);
+    const stars = $('#resultsStars');
+    stars.dataset.title = winner;
+    stars.innerHTML = starSelectorInner(w ? w.rating : 0);
+    stars.classList.toggle('hidden', !w);
+  }
+
+  // ======================================================================
+  //  VIEW SWITCHING (live room <-> personal history)
+  // ======================================================================
+  let currentView = 'main';
+  function showView(name) {
+    currentView = name;
+    $('#viewMain').classList.toggle('hidden', name !== 'main');
+    $('#viewHistory').classList.toggle('hidden', name !== 'history');
+    const btn = $('#historyBtn');
+    if (btn) {
+      btn.classList.toggle('btn-accent2', name === 'history');
+      btn.classList.toggle('text-white', name === 'history');
+      btn.classList.toggle('text-slate-300', name !== 'history');
+    }
+    if (name === 'history') renderHistory();
+  }
+
+  // ======================================================================
+  //  STAR RATING WIDGET (shared by history + results)
+  // ======================================================================
+  // Renders five clickable stars; a delegated click handler reads data-title
+  // from the enclosing .rating-stars element and persists the chosen rating.
+  function starSelectorInner(rating) {
+    let html = '';
+    for (let s = 1; s <= 5; s++) {
+      const on = s <= (rating || 0);
+      html += `<i class="${on ? 'fa-solid text-gold' : 'fa-regular text-slate-600'} fa-star cursor-pointer" data-rate="${s}" role="button" aria-label="${s} star${s === 1 ? '' : 's'}"></i>`;
+    }
+    return html;
+  }
+  function starSelector(title, rating) {
+    return `<span class="rating-stars inline-flex gap-0.5 text-lg" data-title="${escapeHtml(title)}">${starSelectorInner(rating)}</span>`;
+  }
+
+  // ======================================================================
+  //  LOCAL VOTE HISTORY
+  // ======================================================================
+  let lastRecordedSig = null;
+  function resultsSignature() {
+    const titles = state.movies.map((m) => m.title).sort().join('|');
+    const w = (state.results && state.results.winnerTitle) || '';
+    return `${roomId}::${w}::${titles}`;
+  }
+  // Append the just-finished movie night to local history (once per result set).
+  function recordHistory() {
+    if (state.phase !== 'results' || !state.results) return;
+    const sig = resultsSignature();
+    if (sig === lastRecordedSig) return;            // already handled this render cycle
+    lastRecordedSig = sig;
+    const list = loadHistory();
+    if (list.some((h) => h.id === sig)) return;     // already persisted earlier
+    const nameOf = (id) => (state.peers.find((p) => p.id === id) || {}).name || 'Unknown';
+    const titleOf = (id) => (state.movies.find((m) => m.id === id) || {}).title;
+    const entry = {
+      id: sig,
+      date: Date.now(),
+      room: roomId,
+      movies: state.movies.map((m) => ({ title: m.title, by: nameOf(m.by) })),
+      votes: Object.entries(state.votes)
+        .filter(([, r]) => Array.isArray(r) && r.length)
+        .map(([pid, r]) => ({ name: nameOf(pid), ranking: r.map(titleOf).filter(Boolean) })),
+      winner: state.results.winnerTitle || null,
+      watched: null,
+    };
+    list.unshift(entry);
+    saveHistory(list.slice(0, 100));
+  }
+
+  // Mark which movie a past night actually watched (and add it to the personal
+  // watched list so it shows up with a rating everywhere).
+  function setNightWatched(nightId, title) {
+    const list = loadHistory();
+    const night = list.find((h) => h.id === nightId);
+    if (!night) return;
+    night.watched = (night.watched && normTitle(night.watched) === normTitle(title)) ? null : title;
+    saveHistory(list);
+    if (night.watched) upsertWatched(night.watched, (findWatched(night.watched) || {}).rating || 0);
+    renderHistory();
+  }
+
+  function removeWatched(title) {
+    saveWatched(loadWatched().filter((w) => normTitle(w.title) !== normTitle(title)));
+    shareSeen();
+    renderHistory();
+  }
+
+  function renderHistory() {
+    renderHistoryNights();
+    renderWatchedList();
+  }
+
+  function renderHistoryNights() {
+    const wrap = $('#historyList');
+    if (!wrap) return;
+    const nights = loadHistory();
+    $('#historyEmpty').classList.toggle('hidden', nights.length > 0);
+    wrap.innerHTML = '';
+    nights.forEach((n) => {
+      const card = el('div', 'bg-panel2 border border-line rounded-lg p-3 space-y-2');
+      const date = new Date(n.date || Date.now());
+      const dateStr = date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
+
+      const movieRows = (n.movies || []).map((m) => {
+        const isWatched = n.watched && normTitle(n.watched) === normTitle(m.title);
+        return `
+          <div class="flex items-center gap-2 text-sm py-0.5">
+            <button class="mark-night-watched btn w-6 h-6 rounded border ${isWatched ? 'bg-emerald-500/20 border-emerald-500/50 text-emerald-300' : 'bg-ink border-line text-slate-500'} flex items-center justify-center text-xs shrink-0"
+                    data-night="${escapeHtml(n.id)}" data-title="${escapeHtml(m.title)}"
+                    title="${isWatched ? 'This is what you watched' : 'Mark as watched'}"><i class="fa-solid fa-check"></i></button>
+            <span class="flex-1 truncate ${m.title === n.winner ? 'text-gold font-semibold' : ''}">${escapeHtml(m.title)}${m.title === n.winner ? ' 🏆' : ''}</span>
+            ${seenIndicatorHtml(m.title)}
+            <span class="text-[10px] text-slate-500 shrink-0">by ${escapeHtml(m.by || '—')}</span>
+          </div>`;
+      }).join('');
+
+      const voteRows = (n.votes || []).map((v) => `
+        <div class="text-[11px] text-slate-400 py-0.5">
+          <span class="text-slate-300 font-medium">${escapeHtml(v.name)}</span>: ${escapeHtml((v.ranking || []).join(' › ')) || '<span class="italic">no ranking</span>'}
+        </div>`).join('') || '<div class="text-[11px] text-slate-500 italic">No ballots recorded.</div>';
+
+      card.innerHTML = `
+        <div class="flex items-center justify-between gap-2">
+          <div class="font-display text-lg">${escapeHtml(dateStr)}</div>
+          <div class="text-[10px] text-slate-500 uppercase tracking-wider">${escapeHtml(n.room || '')}</div>
+        </div>
+        <div class="text-sm">Winner: <span class="text-gold font-semibold">${n.winner ? escapeHtml(n.winner) : '—'}</span></div>
+        <div class="text-sm">Watched: <span class="${n.watched ? 'text-emerald-300 font-semibold' : 'text-slate-500'}">${n.watched ? escapeHtml(n.watched) : 'not set'}</span></div>
+        <div>
+          <div class="text-[10px] uppercase tracking-wider text-slate-400 mt-1 mb-1">Nominated</div>
+          ${movieRows || '<div class="text-[11px] text-slate-500 italic">No movies.</div>'}
+        </div>
+        <details>
+          <summary class="text-[11px] text-slate-400 cursor-pointer select-none">Who voted for what</summary>
+          <div class="mt-1">${voteRows}</div>
+        </details>`;
+
+      card.querySelectorAll('.mark-night-watched').forEach((b) => {
+        b.addEventListener('click', () => setNightWatched(b.dataset.night, b.dataset.title));
+      });
+      wireSeenIndicator(card);
+      wrap.appendChild(card);
+    });
+  }
+
+  function renderWatchedList() {
+    const wrap = $('#watchedList');
+    if (!wrap) return;
+    const watched = loadWatched().slice().sort((a, b) => (b.watchedAt || 0) - (a.watchedAt || 0));
+    $('#watchedEmpty').classList.toggle('hidden', watched.length > 0);
+    wrap.innerHTML = '';
+    watched.forEach((w) => {
+      const row = el('div', 'flex items-center gap-3 bg-panel2 border border-line rounded-lg px-3 py-2');
+      row.innerHTML = `
+        <span class="flex-1 text-sm font-medium truncate">${escapeHtml(w.title)}</span>
+        ${starSelector(w.title, w.rating)}
+        <button class="remove-watched btn w-7 h-7 rounded bg-ink border border-line text-slate-400 hover:text-accent" title="Remove" data-title="${escapeHtml(w.title)}"><i class="fa-solid fa-trash"></i></button>`;
+      row.querySelector('.remove-watched').addEventListener('click', () => removeWatched(w.title));
+      wrap.appendChild(row);
+    });
   }
 
   // ======================================================================
@@ -1617,6 +2134,36 @@
 
     // Guest: in-app QR scanner.
     wireScanner();
+
+    // ---- Recommendation typeahead on the nominate input ----
+    wireTypeahead();
+
+    // ---- History view toggle ----
+    $('#historyBtn').addEventListener('click', () => showView(currentView === 'history' ? 'main' : 'history'));
+    $('#backToRoomBtn').addEventListener('click', () => showView('main'));
+
+    // ---- Results: mark the winning movie as watched ----
+    $('#markWatchedBtn').addEventListener('click', () => {
+      const winner = state.results && state.results.winnerTitle;
+      if (!winner) return;
+      upsertWatched(winner, (findWatched(winner) || {}).rating || 0);
+      const msg = $('#watchedMsg');
+      msg.textContent = 'Saved to your history ✓';
+      setTimeout(() => { msg.textContent = ''; }, 1800);
+      renderResultsWatched();
+    });
+
+    // ---- Delegated star-rating clicks (history list + results screen) ----
+    document.addEventListener('click', (e) => {
+      const star = e.target.closest && e.target.closest('.rating-stars i[data-rate]');
+      if (!star) return;
+      const wrap = star.closest('.rating-stars');
+      const title = wrap && wrap.dataset.title;
+      if (!title) return;
+      upsertWatched(title, Number(star.dataset.rate) || 0);
+      renderResultsWatched();
+      if (currentView === 'history') renderHistory();
+    });
   }
 
   // ----------------------- html5-qrcode scanner -------------------------

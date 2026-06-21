@@ -1,0 +1,50 @@
+name: Update movie catalogue
+
+# Regenerates movies.json from TMDB (+ OMDb) at build time and commits the
+# result. Run it manually from the Actions tab, or on a monthly schedule.
+#
+# Requires repository secrets:
+#   TMDB_API_KEY  (required) — https://www.themoviedb.org/settings/api
+#   OMDB_API_KEY  (optional) — https://www.omdbapi.com/apikey.aspx
+on:
+  workflow_dispatch:
+    inputs:
+      pages:
+        description: "TMDB pages to pull per list (20 movies/page)"
+        required: false
+        default: "25"
+  schedule:
+    # 04:00 UTC on the 1st of every month.
+    - cron: "0 4 1 * *"
+
+permissions:
+  contents: write
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Generate movies.json
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+          OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
+        run: |
+          python3 scripts/generate_movies.py --pages "${{ github.event.inputs.pages || '25' }}"
+
+      - name: Commit changes
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- movies.json; then
+            echo "movies.json unchanged — nothing to commit."
+          else
+            git add movies.json
+            git commit -m "chore: refresh movies.json from TMDB/OMDb"
+            git push
+          fi
