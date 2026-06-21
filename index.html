@@ -485,7 +485,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.5</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.6</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -1842,6 +1842,8 @@
       director: 1.5,
       keyword:  0.8,
       quality:  1.0,
+      peer:     1.0,
+      embedding: 2.0,
     },
     // Minimum number of rated/nominated titles needed before switching to
     // personalised mode (below this we use cold-start).
@@ -1892,11 +1894,29 @@
     return n ? sum / n : 0.5;
   }
 
+  // ---------- cosine similarity ----------
+  // Cosine similarity between two equal-length numeric vectors, in [-1, 1].
+  // Returns 0 when either vector is missing, mismatched, or zero-magnitude.
+  function cosineSimilarity(a, b) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || a.length === 0) {
+      return 0;
+    }
+    let dot = 0, magA = 0, magB = 0;
+    for (let i = 0; i < a.length; i++) {
+      const x = a[i], y = b[i];
+      dot += x * y;
+      magA += x * x;
+      magB += y * y;
+    }
+    if (magA === 0 || magB === 0) return 0;
+    return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+  }
+
   // ---------- taste profile ----------
   // Build a multi-signal profile from watched+rated movies and past nominations.
   // Each signal is a Map<feature, weight> where positive = liked, negative = disliked.
   // Returns { genreWeights, actorWeights, directorWeights, keywordWeights,
-  //           watchedCount, ratedCount, hasSignal }
+  //           userVector, watchedCount, ratedCount, hasSignal }
   function buildTasteProfile() {
     const genreWeights    = new Map();
     const actorWeights    = new Map();
@@ -1952,7 +1972,40 @@
     });
 
     const hasSignal = rated + watched.length + loadHistory().length >= REC_CONFIG.personaliseThreshold;
-    return { genreWeights, actorWeights, directorWeights, keywordWeights,
+
+    // Normalise the cumulative affinity maps into an *average* scale so that
+    // users with lots of history don't produce runaway, unbounded weights.
+    const totalSignals = watched.length + rated + loadHistory().length;
+    if (totalSignals > 0) {
+      [genreWeights, actorWeights, directorWeights, keywordWeights].forEach((map) => {
+        map.forEach((value, key) => map.set(key, value / totalSignals));
+      });
+    }
+
+    // Build the user "taste vector": the average embedding of every movie the
+    // user rated above neutral (> 2.5). The browser later ranks candidates by
+    // cosine similarity to this vector.
+    let userVector = null;
+    let vectorCount = 0;
+    watched.forEach((wEntry) => {
+      if (!((wEntry.rating || 0) > 2.5)) return;
+      const meta = movieMeta(wEntry.title);
+      const emb = meta && meta.embedding;
+      if (!Array.isArray(emb) || emb.length === 0) return;
+      if (!userVector) {
+        userVector = emb.slice();
+      } else if (userVector.length === emb.length) {
+        for (let i = 0; i < userVector.length; i++) userVector[i] += emb[i];
+      } else {
+        return;
+      }
+      vectorCount += 1;
+    });
+    if (userVector && vectorCount > 0) {
+      for (let i = 0; i < userVector.length; i++) userVector[i] /= vectorCount;
+    }
+
+    return { genreWeights, actorWeights, directorWeights, keywordWeights, userVector,
              watchedCount: watched.length, ratedCount: rated, hasSignal };
   }
 
@@ -1962,17 +2015,45 @@
   // perfectly match the viewer's taste are never unfairly buried.
   function scoreCandidate(m, profile) {
     const w   = REC_CONFIG.weights;
-    const gen = movieGenres(m).reduce((s, g) => s + (profile.genreWeights.get(g) || 0), 0);
-    const act = Array.isArray(m.cast)
-      ? m.cast.reduce((s, a) => s + (profile.actorWeights.get(a) || 0), 0)
-      : 0;
+    // Metadata features are *averages* over each feature list so that movies
+    // with long genre/cast lists aren't unfairly boosted by sheer volume.
+    const genres = movieGenres(m);
+    const gen = genres.reduce((s, g) => s + (profile.genreWeights.get(g) || 0), 0) / (genres.length || 1);
+    const cast = Array.isArray(m.cast) ? m.cast : [];
+    const act = cast.reduce((s, a) => s + (profile.actorWeights.get(a) || 0), 0) / (cast.length || 1);
     const dirs = Array.isArray(m.director) ? m.director
                : (m.director ? [m.director] : []);
-    const dir  = dirs.reduce((s, d) => s + (profile.directorWeights.get(d) || 0), 0);
+    const dir  = dirs.reduce((s, d) => s + (profile.directorWeights.get(d) || 0), 0) / (dirs.length || 1);
     const kws  = extractKeywords(m.description);
-    const kw   = kws.reduce((s, k) => s + (profile.keywordWeights.get(k) || 0), 0);
+    const kw   = kws.reduce((s, k) => s + (profile.keywordWeights.get(k) || 0), 0) / (kws.length || 1);
     const qual = qualityScore(m);
-    return w.genre * gen + w.actor * act + w.director * dir + w.keyword * kw + w.quality * qual;
+
+    // In-room collaborative filtering: nudge the score using how the *other*
+    // peers in the room have already reacted to this candidate.
+    let peerBonus = 0;
+    const seen = state.seen || {};
+    Object.keys(seen).forEach((pid) => {
+      if (pid === myId) return;                 // ignore my own seen list
+      const list = seen[pid];
+      if (!Array.isArray(list)) return;
+      const hit = list.find((s) => normTitle(s.title) === normTitle(m.title));
+      if (!hit) return;
+      const r = hit.rating || 0;
+      if (r >= 4) peerBonus += 0.5;             // a peer loved it
+      else if (r >= 1 && r <= 2) peerBonus -= 0.5; // a peer disliked it
+      else if (r === 0) peerBonus -= 0.2;       // watched but left unrated
+    });
+
+    // Embedding similarity: cosine between the user's taste vector and the
+    // candidate's embedding, remapped from [-1, 1] to [0, 1].
+    let cosineScore = 0;
+    if (Array.isArray(profile.userVector) && Array.isArray(m.embedding)) {
+      const sim = cosineSimilarity(profile.userVector, m.embedding);
+      cosineScore = (sim + 1) / 2;
+    }
+
+    return w.genre * gen + w.actor * act + w.director * dir + w.keyword * kw
+         + w.quality * qual + w.peer * peerBonus + w.embedding * cosineScore;
   }
 
   // Cold-start score: quality + small recency boost; no personalisation.

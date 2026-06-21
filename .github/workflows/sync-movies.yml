@@ -6,7 +6,8 @@ name: Sync movie catalogue
 #      it. A failed download is non-fatal — the sync continues without it.
 #   2. Runs scripts/sync.py to import any ids from that export *and* discover
 #      500 pages of TMDB movies.
-#   3. Commits and pushes the updated movies.json to the main branch.
+#   3. Generates ML embeddings for any new movies (scripts/generate_embeddings.py).
+#   4. Commits and pushes the updated movies.json to the main branch.
 #
 # Requires repository secrets:
 #   TMDB_API_KEY  (required) — https://www.themoviedb.org/settings/api
@@ -60,6 +61,12 @@ jobs:
           python3 scripts/sync.py \
             --pages "${{ github.event.inputs.pages || '500' }}" \
             --ids-file "$IDS_FILE"
+
+      - name: Install embedding dependencies
+        run: pip install --upgrade sentence-transformers
+
+      - name: Generate embeddings
+        run: python3 scripts/generate_embeddings.py --input movies.json
 
       - name: Commit changes
         run: |
