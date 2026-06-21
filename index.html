@@ -444,12 +444,34 @@
         <p class="text-xs text-slate-500 -mt-2">
           Saved only in this browser. A history entry is recorded each time results are shown.
         </p>
+        <!-- Search the vote history by movie: shows nights where the named movie
+             won or was nominated. -->
+        <div class="relative">
+          <i class="fa-solid fa-magnifying-glass absolute left-3 top-1/2 -translate-y-1/2 text-slate-500 text-xs"></i>
+          <input id="historySearch" type="search" autocomplete="off"
+                 placeholder="Search by movie (won or nominated)…"
+                 class="w-full bg-ink border border-line rounded-lg pl-8 pr-3 py-2 text-sm placeholder:text-slate-500" />
+        </div>
+        <p id="historySearchMsg" class="hidden text-xs text-slate-400 -mt-1"></p>
         <div id="historyList" class="space-y-3"></div>
         <p id="historyEmpty" class="text-sm text-slate-500 italic">No movie nights recorded yet.</p>
       </div>
 
       <div class="card p-4 space-y-3">
-        <h2 class="font-display text-2xl">MOVIES YOU'VE WATCHED</h2>
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+          <h2 class="font-display text-2xl">MOVIES YOU'VE WATCHED</h2>
+          <!-- Sort the watched list by rating, title, or release date. -->
+          <label class="flex items-center gap-2 text-xs text-slate-400">
+            <span class="uppercase tracking-wider">Sort</span>
+            <select id="watchedSort" class="bg-ink border border-line rounded-lg px-2 py-1.5 text-sm text-slate-200">
+              <option value="recent">Recently watched</option>
+              <option value="ratingDesc">Rating: high → low</option>
+              <option value="ratingAsc">Rating: low → high</option>
+              <option value="alpha">Alphabetical (A → Z)</option>
+              <option value="release">Release date (newest)</option>
+            </select>
+          </label>
+        </div>
         <p class="text-xs text-slate-500 -mt-1">Your ratings are shared with the room so others can see what you thought.</p>
         <div id="watchedList" class="space-y-2"></div>
         <p id="watchedEmpty" class="text-sm text-slate-500 italic">You haven't marked any movies as watched yet.</p>
@@ -2401,11 +2423,40 @@
     renderWatchedList();
   }
 
+  // UI state for the history view: a search query (filters movie nights by a
+  // movie that won or was nominated) and the watched-list sort order.
+  let historyQuery = '';
+  let watchedSort = 'recent';
+
   function renderHistoryNights() {
     const wrap = $('#historyList');
     if (!wrap) return;
-    const nights = loadHistory();
-    $('#historyEmpty').classList.toggle('hidden', nights.length > 0);
+    const allNights = loadHistory();
+    const q = normTitle(historyQuery);
+    const nights = q
+      ? allNights.filter((n) =>
+          (n.movies || []).some((m) => normTitle(m.title).includes(q)) ||
+          (n.winner && normTitle(n.winner).includes(q)))
+      : allNights;
+
+    // Search status line: how many nights matched the current query.
+    const msg = $('#historySearchMsg');
+    if (msg) {
+      if (q) {
+        msg.textContent = `${nights.length} night${nights.length === 1 ? '' : 's'} matching “${historyQuery.trim()}”`;
+        msg.classList.remove('hidden');
+      } else {
+        msg.textContent = '';
+        msg.classList.add('hidden');
+      }
+    }
+
+    $('#historyEmpty').classList.toggle('hidden', allNights.length > 0);
+    $('#historyEmpty').textContent = 'No movie nights recorded yet.';
+    if (allNights.length > 0 && nights.length === 0) {
+      $('#historyEmpty').classList.remove('hidden');
+      $('#historyEmpty').textContent = 'No movie nights match your search.';
+    }
     wrap.innerHTML = '';
     nights.forEach((n) => {
       const card = el('div', 'bg-panel2 border border-line rounded-lg p-3 space-y-2');
@@ -2458,10 +2509,40 @@
     });
   }
 
+  // Order the watched list for display. Release date comes from the catalogue
+  // (movies.json) when available; titles without a known year sort last.
+  function sortWatched(list, mode) {
+    const byTitle = (a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
+    const releaseYear = (w) => {
+      const meta = movieMeta(w.title);
+      const y = meta && parseInt(meta.year, 10);
+      return Number.isFinite(y) ? y : null;
+    };
+    switch (mode) {
+      case 'ratingDesc':
+        return list.sort((a, b) => (b.rating || 0) - (a.rating || 0) || byTitle(a, b));
+      case 'ratingAsc':
+        return list.sort((a, b) => (a.rating || 0) - (b.rating || 0) || byTitle(a, b));
+      case 'alpha':
+        return list.sort(byTitle);
+      case 'release':
+        return list.sort((a, b) => {
+          const ya = releaseYear(a), yb = releaseYear(b);
+          if (ya == null && yb == null) return byTitle(a, b);
+          if (ya == null) return 1;
+          if (yb == null) return -1;
+          return yb - ya || byTitle(a, b);
+        });
+      case 'recent':
+      default:
+        return list.sort((a, b) => (b.watchedAt || 0) - (a.watchedAt || 0));
+    }
+  }
+
   function renderWatchedList() {
     const wrap = $('#watchedList');
     if (!wrap) return;
-    const watched = loadWatched().slice().sort((a, b) => (b.watchedAt || 0) - (a.watchedAt || 0));
+    const watched = sortWatched(loadWatched().slice(), watchedSort);
     $('#watchedEmpty').classList.toggle('hidden', watched.length > 0);
     wrap.innerHTML = '';
     watched.forEach((w) => {
@@ -3016,6 +3097,24 @@
     // ---- History view toggle ----
     $('#historyBtn').addEventListener('click', () => showView(currentView === 'history' ? 'main' : 'history'));
     $('#backToRoomBtn').addEventListener('click', () => showView('main'));
+
+    // ---- History search (filter nights by a won/nominated movie) ----
+    const historySearch = $('#historySearch');
+    if (historySearch) {
+      historySearch.addEventListener('input', () => {
+        historyQuery = historySearch.value || '';
+        renderHistoryNights();
+      });
+    }
+
+    // ---- Watched-list sort order ----
+    const watchedSortSel = $('#watchedSort');
+    if (watchedSortSel) {
+      watchedSortSel.addEventListener('change', () => {
+        watchedSort = watchedSortSel.value || 'recent';
+        renderWatchedList();
+      });
+    }
 
     // ---- Results: mark the winning movie as watched ----
     $('#markWatchedBtn').addEventListener('click', () => {
