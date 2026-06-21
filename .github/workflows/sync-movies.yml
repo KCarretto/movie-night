@@ -7,7 +7,7 @@ name: Sync movie catalogue
 #   2. Runs scripts/sync.py to import any ids from that export *and* discover
 #      500 pages of TMDB movies.
 #   3. Generates ML embeddings for any new movies (scripts/generate_embeddings.py).
-#   4. Commits and pushes the updated movies.json to the main branch.
+#   4. Commits and pushes the updated movies.json + embeddings.json to main.
 #
 # Requires repository secrets:
 #   TMDB_API_KEY  (required) — https://www.themoviedb.org/settings/api
@@ -66,16 +66,16 @@ jobs:
         run: pip install --upgrade sentence-transformers
 
       - name: Generate embeddings
-        run: python3 scripts/generate_embeddings.py --input movies.json
+        run: python3 scripts/generate_embeddings.py --movies movies.json --embeddings embeddings.json
 
       - name: Commit changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- movies.json; then
-            echo "movies.json unchanged — nothing to commit."
+          if git diff --quiet -- movies.json embeddings.json; then
+            echo "movies.json and embeddings.json unchanged — nothing to commit."
           else
-            git add movies.json
-            git commit -m "chore: sync movies.json from TMDB/OMDb"
+            git add movies.json embeddings.json
+            git commit -m "chore: sync movies.json + embeddings.json from TMDB/OMDb"
             git push origin HEAD:main
           fi
