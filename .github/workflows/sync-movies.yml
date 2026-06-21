@@ -7,6 +7,7 @@ name: Sync movie catalogue
 #      it. A failed download is non-fatal — the sync continues without it.
 #   3. Runs scripts/sync.py to import any ids from that export *and* discover
 #      500 pages of TMDB movies, writing the dense binary catalogue movies.pbf.
+#      Existing entries missing language/cast/director are backfilled in batches.
 #   4. Generates ML embeddings for any new movies (scripts/generate_embeddings.py)
 #      into the packed binary embeddings.bin and stamps each record's v_idx.
 #   5. Commits and pushes the updated movies.pbf + embeddings.bin to main.

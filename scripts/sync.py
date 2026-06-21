@@ -240,6 +240,23 @@ def build_movie(
 
     # Extract cast (top 5 by order) and director(s) from the embedded credits
     # payload — present when the detail was fetched with append_to_response=credits.
+    cast, directors = extract_credits(detail)
+    if cast:
+        movie["cast"] = cast
+    if directors:
+        movie["director"] = directors
+    return movie
+
+
+def extract_credits(detail: Dict[str, Any]) -> tuple:
+    """Pull (cast, directors) from a TMDB *details* payload's credits block.
+
+    Expects the detail to have been fetched with ``append_to_response=credits``
+    so the ``credits`` key carries the embedded ``cast``/``crew`` arrays. Returns
+    the top-5 billed cast names and every credited director. Shared by
+    :func:`build_movie` (new downloads) and :func:`enrich_existing_movies`
+    (backfilling older catalogue entries).
+    """
     credits = detail.get("credits") or {}
     cast_entries = credits.get("cast") or []
     crew_entries = credits.get("crew") or []
@@ -253,11 +270,71 @@ def build_movie(
         for c in crew_entries
         if c.get("name") and c.get("job") == "Director"
     ]
-    if cast:
-        movie["cast"] = cast
-    if directors:
-        movie["director"] = directors
-    return movie
+    return cast, directors
+
+
+def movie_needs_enrichment(movie: Dict[str, Any]) -> bool:
+    """True when a catalogued movie is missing fields we can backfill from TMDB.
+
+    Older ``movies.pbf`` entries were written before ``language``, ``cast`` and
+    ``director`` were captured. Because the sync is append-only and resumes
+    without re-downloading known ids, those gaps would otherwise be permanent.
+    A movie qualifies for a one-off re-fetch when it has a usable ``tmdb_id`` but
+    is still missing any of those three fields.
+    """
+    if not isinstance(movie.get("tmdb_id"), int):
+        return False
+    return not movie.get("language") or not movie.get("cast") or not movie.get("director")
+
+
+def enrich_existing_movies(
+    movies: List[Dict[str, Any]],
+    client: "TMDBClient",
+    limit: int = 0,
+    pause: float = 0.25,
+) -> int:
+    """Backfill ``language``/``cast``/``director`` for stale catalogue entries.
+
+    Re-fetches each qualifying movie's TMDB detail (with credits) and fills in
+    only the fields it is missing, mutating the dicts in place. Capped at *limit*
+    movies per run (0 = no cap) so a scheduled job clears the backlog gradually
+    instead of re-downloading the whole catalogue at once. Returns the number of
+    movies actually updated.
+    """
+    stale = [m for m in movies if movie_needs_enrichment(m)]
+    if not stale:
+        return 0
+    if limit > 0:
+        stale = stale[:limit]
+    progress = Progress("Backfilling cast/language", total=len(stale))
+    updated = 0
+    for movie in stale:
+        progress.update()
+        mid = movie.get("tmdb_id")
+        try:
+            detail = client.get(
+                f"movie/{mid}",
+                {"language": "en-US", "append_to_response": "credits"},
+            )
+        except (RuntimeError, urllib.error.HTTPError) as err:
+            print(f"\n  skip backfill {mid}: {err}", file=sys.stderr)
+            continue
+        changed = False
+        language = (detail.get("original_language") or "").strip() or None
+        if language and not movie.get("language"):
+            movie["language"] = language
+            changed = True
+        cast, directors = extract_credits(detail)
+        if cast and not movie.get("cast"):
+            movie["cast"] = cast
+            changed = True
+        if directors and not movie.get("director"):
+            movie["director"] = directors
+            changed = True
+        if changed:
+            updated += 1
+    progress.done(suffix=f"{updated} updated")
+    return updated
 
 
 def dedupe_movies(movies: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -574,6 +651,14 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Re-download everything instead of resuming from the existing "
         "--output file (which is skipped by default).",
     )
+    parser.add_argument(
+        "--backfill-limit",
+        type=int,
+        default=2000,
+        help="Max existing movies missing language/cast/director to re-fetch and "
+        "enrich per run (0 = disable backfill). Older catalogue entries predate "
+        "those fields; this fills the backlog incrementally. Default: 2000.",
+    )
     return parser.parse_args(argv)
 
 
@@ -602,6 +687,17 @@ def main(argv: Optional[List[str]] = None) -> int:
     existing = [] if args.refresh else load_existing(args.output)
     if existing:
         print(f"Resuming from {len(existing)} movie(s) in {args.output}.", file=sys.stderr)
+
+    # Backfill language/cast/director for older catalogue entries that predate
+    # those fields. Done before the catalogue is rewritten so the enriched dicts
+    # are persisted in this run. Capped per run so the scheduled job clears the
+    # backlog gradually rather than re-downloading everything at once.
+    if existing and args.backfill_limit and tmdb_key:
+        client = TMDBClient(tmdb_key, pause=args.pause)
+        updated = enrich_existing_movies(
+            existing, client, limit=args.backfill_limit, pause=args.pause
+        )
+        print(f"Backfilled {updated} existing movie(s) with missing fields.", file=sys.stderr)
 
     # Build resume sets from existing movies so iter_new_movies can skip them.
     # We derive them here rather than inside the generator so the generator
