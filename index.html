@@ -196,13 +196,47 @@
         <div class="text-2xl">🎬</div>
         <div class="min-w-0">
           <h1 class="font-display text-2xl leading-none">PLOT POLLS</h1>
-          <p class="text-[11px] text-slate-400 -mt-0.5">P2P Ranked-Choice Voting</p>
+          <p class="text-[11px] text-slate-400 -mt-0.5">Voting in Reel Time</p>
         </div>
       </a>
       <!-- Live network status indicator -->
       <div id="netStatus" class="flex items-center gap-2 text-xs px-3 py-1.5 rounded-full bg-panel2 border border-line">
         <span id="netDot" class="dot pulse" style="background:#ffce4d"></span>
         <span id="netText" class="font-medium">Booting…</span>
+      </div>
+      <!-- Identity + settings: who you are in the room, with a cog to manage
+           your name and data. Lives in the top bar, next to history. -->
+      <div class="flex items-center gap-2">
+        <div class="text-right leading-tight">
+          <div class="text-[10px] uppercase tracking-wider text-slate-400">You are</div>
+          <div id="youLabel" class="text-sm font-semibold max-w-[8rem] truncate">…</div>
+        </div>
+        <!-- Settings cog (shown once a name has been chosen). -->
+        <div id="settingsWrap" class="hidden relative">
+          <button id="settingsBtn" type="button" aria-haspopup="true" aria-expanded="false"
+                  class="btn w-9 h-9 rounded-lg bg-panel2 border border-line flex items-center justify-center text-slate-300"
+                  title="Settings"><i class="fa-solid fa-gear"></i></button>
+          <div id="settingsMenu" class="menu hidden card p-1">
+            <button id="changeNameBtn" type="button"
+                    class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2">Change name</button>
+            <div class="my-1 border-t border-line"></div>
+            <button id="exportDataBtn" type="button"
+                    class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-file-export w-4 mr-1.5 text-slate-400"></i>Export my data</button>
+            <button id="importDataBtn" type="button"
+                    class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-file-import w-4 mr-1.5 text-slate-400"></i>Import data</button>
+            <div class="flex items-center">
+              <button id="importLetterboxdBtn" type="button"
+                      class="flex-1 text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-film w-4 mr-1.5 text-slate-400"></i>Import from Letterboxd</button>
+              <span id="letterboxdInfoWrap" class="relative">
+                <button id="letterboxdInfoBtn" type="button" aria-label="Letterboxd import instructions"
+                        class="btn w-6 h-6 mr-1 rounded-full bg-panel2 border border-line flex items-center justify-center text-[11px] text-slate-300"><i class="fa-solid fa-info"></i></button>
+                <span id="letterboxdInfoTip" class="hidden absolute right-0 top-7 z-50 w-60 card p-3 text-xs text-slate-300 leading-snug normal-case">You may export your data from Letterboxd <a href="https://letterboxd.com/settings/data/" target="_blank" rel="noopener noreferrer" class="text-accent2 underline">here</a>, then use this option to import the downloaded 'ratings.json'.</span>
+              </span>
+            </div>
+            <button id="syncDeviceBtn" type="button"
+                    class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-qrcode w-4 mr-1.5 text-slate-400"></i>Sync</button>
+          </div>
+        </div>
       </div>
       <!-- Toggle between the live room and the personal history view. -->
       <button id="historyBtn" type="button" title="Movie night history"
@@ -224,31 +258,6 @@
         <div>
           <div class="text-[11px] uppercase tracking-wider text-slate-400">Room</div>
           <div id="roomIdLabel" class="font-display text-3xl">------</div>
-        </div>
-        <div class="flex items-center gap-2">
-          <div class="text-right">
-            <div class="text-[11px] uppercase tracking-wider text-slate-400">You are</div>
-            <div id="youLabel" class="font-semibold">…</div>
-          </div>
-          <!-- Settings cog (shown once a name has been chosen). -->
-          <div id="settingsWrap" class="hidden relative">
-            <button id="settingsBtn" type="button" aria-haspopup="true" aria-expanded="false"
-                    class="btn w-8 h-8 rounded-lg bg-panel2 border border-line flex items-center justify-center text-slate-300"
-                    title="Settings"><i class="fa-solid fa-gear"></i></button>
-            <div id="settingsMenu" class="menu hidden card p-1">
-              <button id="changeNameBtn" type="button"
-                      class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2">Change name</button>
-              <div class="my-1 border-t border-line"></div>
-              <button id="exportDataBtn" type="button"
-                      class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-file-export w-4 mr-1.5 text-slate-400"></i>Export my data</button>
-              <button id="importDataBtn" type="button"
-                      class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-file-import w-4 mr-1.5 text-slate-400"></i>Import data</button>
-              <button id="importLetterboxdBtn" type="button"
-                      class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-film w-4 mr-1.5 text-slate-400"></i>Import from Letterboxd</button>
-              <button id="syncDeviceBtn" type="button"
-                      class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-qrcode w-4 mr-1.5 text-slate-400"></i>Sync to this device</button>
-            </div>
-          </div>
         </div>
       </div>
 
@@ -449,7 +458,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 2.0</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.2</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -491,7 +500,7 @@
     <div id="syncBackdrop" class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
     <div class="card relative z-10 max-w-sm w-full p-6 space-y-4">
       <div class="flex items-center justify-between">
-        <h3 class="font-display text-2xl">SYNC TO THIS DEVICE</h3>
+        <h3 class="font-display text-2xl">SYNC</h3>
         <button id="closeSyncBtn" class="btn w-8 h-8 rounded-lg bg-panel2 border border-line text-slate-300" aria-label="Close"><i class="fa-solid fa-xmark"></i></button>
       </div>
 
@@ -1421,6 +1430,12 @@
     $('#phaseNominate').classList.toggle('hidden', state.phase !== 'lobby');
     $('#phaseVote').classList.toggle('hidden', state.phase !== 'voting');
     $('#phaseResults').classList.toggle('hidden', state.phase !== 'results');
+
+    // Once voting starts there's no one left to invite, so hide the join
+    // helpers (host QR/share block and the guest QR scanner) outside the lobby.
+    const inLobby = state.phase === 'lobby';
+    $('#shareBlock').classList.toggle('hidden', !(inLobby && isHost));
+    $('#scanBlock').classList.toggle('hidden', !(inLobby && !isHost));
 
     // Host-only controls visibility.
     $('#lockBtn').classList.toggle('hidden', !(isHost && state.phase === 'lobby'));
@@ -2833,6 +2848,8 @@
   function closeSettingsMenu() {
     $('#settingsMenu').classList.add('hidden');
     $('#settingsBtn').setAttribute('aria-expanded', 'false');
+    const tip = $('#letterboxdInfoTip');
+    if (tip) tip.classList.add('hidden');
   }
 
   // ----------------------- Wire up all interactive controls -------------
@@ -2881,6 +2898,21 @@
     $('#importDataBtn').addEventListener('click', () => { closeSettingsMenu(); $('#importFileInput').click(); });
     $('#importLetterboxdBtn').addEventListener('click', () => { closeSettingsMenu(); $('#letterboxdFileInput').click(); });
     $('#syncDeviceBtn').addEventListener('click', () => { closeSettingsMenu(); openSyncModal(); });
+
+    // Letterboxd import instructions: toggle on click, reveal on hover.
+    const lbInfoBtn = $('#letterboxdInfoBtn');
+    const lbInfoTip = $('#letterboxdInfoTip');
+    const lbInfoWrap = $('#letterboxdInfoWrap');
+    if (lbInfoBtn && lbInfoTip && lbInfoWrap) {
+      lbInfoBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        lbInfoTip.classList.toggle('hidden');
+      });
+      lbInfoWrap.addEventListener('mouseenter', () => lbInfoTip.classList.remove('hidden'));
+      lbInfoWrap.addEventListener('mouseleave', () => lbInfoTip.classList.add('hidden'));
+      // Keep clicks inside the tooltip (e.g. the link) from closing the menu.
+      lbInfoTip.addEventListener('click', (e) => e.stopPropagation());
+    }
 
     $('#importFileInput').addEventListener('change', (e) => {
       const f = e.target.files && e.target.files[0];
