@@ -1,13 +1,15 @@
 name: Sync movie catalogue
 
-# Refreshes movies.json from TMDB (+ OMDb) at build time and commits the result.
+# Refreshes movies.pbf from TMDB (+ OMDb) at build time and commits the result.
 # Runs twice a day, or on demand from the Actions tab. Each run:
-#   1. Downloads TMDB's daily id export (movie_ids_MM_DD_YYYY.json.gz) and unzips
+#   1. Compiles the Protobuf bindings from scripts/catalog.proto.
+#   2. Downloads TMDB's daily id export (movie_ids_MM_DD_YYYY.json.gz) and unzips
 #      it. A failed download is non-fatal — the sync continues without it.
-#   2. Runs scripts/sync.py to import any ids from that export *and* discover
-#      500 pages of TMDB movies.
-#   3. Generates ML embeddings for any new movies (scripts/generate_embeddings.py).
-#   4. Commits and pushes the updated movies.json + embeddings.json to main.
+#   3. Runs scripts/sync.py to import any ids from that export *and* discover
+#      500 pages of TMDB movies, writing the dense binary catalogue movies.pbf.
+#   4. Generates ML embeddings for any new movies (scripts/generate_embeddings.py)
+#      into the packed binary embeddings.bin and stamps each record's v_idx.
+#   5. Commits and pushes the updated movies.pbf + embeddings.bin to main.
 #
 # Requires repository secrets:
 #   TMDB_API_KEY  (required) — https://www.themoviedb.org/settings/api
@@ -39,6 +41,14 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Install Protobuf toolchain
+        # `protobuf` provides the Python runtime; `grpcio-tools` bundles protoc
+        # (invoked via `python -m grpc_tools.protoc`) so no system package is needed.
+        run: pip install --upgrade protobuf grpcio-tools
+
+      - name: Generate Protobuf bindings
+        run: python -m grpc_tools.protoc -I scripts --python_out scripts scripts/catalog.proto
+
       - name: Download TMDB daily id export
         run: |
           IDS_FILE="movie_ids_$(date -u +%m_%d_%Y).json"
@@ -53,7 +63,7 @@ jobs:
             rm -f "${IDS_FILE}.gz"
           fi
 
-      - name: Sync movies.json
+      - name: Sync movies.pbf
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
           OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
@@ -66,16 +76,16 @@ jobs:
         run: pip install --upgrade sentence-transformers
 
       - name: Generate embeddings
-        run: python3 scripts/generate_embeddings.py --movies movies.json --embeddings embeddings.json
+        run: python3 scripts/generate_embeddings.py --movies movies.pbf --embeddings embeddings.bin
 
       - name: Commit changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- movies.json embeddings.json; then
-            echo "movies.json and embeddings.json unchanged — nothing to commit."
+          if git diff --quiet -- movies.pbf embeddings.bin; then
+            echo "movies.pbf and embeddings.bin unchanged — nothing to commit."
           else
-            git add movies.json embeddings.json
-            git commit -m "chore: sync movies.json + embeddings.json from TMDB/OMDb"
+            git add movies.pbf embeddings.bin
+            git commit -m "chore: sync movies.pbf + embeddings.bin from TMDB/OMDb"
             git push origin HEAD:main
           fi

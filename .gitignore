@@ -5,3 +5,6 @@ movie_ids_*.json.gz
 # Python bytecode cache.
 __pycache__/
 *.pyc
+
+# Generated Protobuf bindings (built from scripts/catalog.proto at build time).
+scripts/catalog_pb2.py

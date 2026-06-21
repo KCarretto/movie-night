@@ -16,6 +16,8 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <!-- html5-qrcode: in-app camera QR scanner (fallback join method) -->
   <script src="https://unpkg.com/html5-qrcode"></script>
+  <!-- protobuf.js (light runtime): decodes the binary movies.pbf catalogue -->
+  <script src="https://cdn.jsdelivr.net/npm/protobufjs@7.6.1/dist/light/protobuf.min.js"></script>
   <!-- Font Awesome: button & action icons (trash, gear, dice, etc.) -->
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" />
 
@@ -161,6 +163,10 @@
     .rec-poster { width: 100%; height: 200px; border-radius: 0; }
     .rec-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
       overflow: hidden; }
+    .rec-why { display: inline-flex; align-items: center; gap: 3px; max-width: 100%;
+      font-size: 10px; line-height: 1.2; padding: 2px 6px; border-radius: 9999px;
+      background: rgba(124,92,255,.14); color: #b9a7ff; border: 1px solid rgba(124,92,255,.28);
+      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .rec-badge { position: absolute; top: 8px; left: 8px; font-size: 10px; line-height: 1;
       padding: 3px 7px; border-radius: 9999px; background: rgba(124,92,255,.92); color: #fff;
       letter-spacing: .04em; }
@@ -317,7 +323,7 @@
 
     <!-- ===================== RECOMMENDED MOVIES ===================== -->
     <!-- A horizontally scrollable carousel of suggestions. Recommendations are a
-         progressive enhancement powered by movies.json + the viewer's saved
+         progressive enhancement powered by movies.pbf + the viewer's saved
          ratings; the whole section hides itself when the catalogue is missing
          or the room has left the lobby phase. -->
     <section id="phaseRecommend" class="hidden card p-4 space-y-3">
@@ -356,7 +362,7 @@
           <input id="movieInput" maxlength="80" placeholder="Add a movie title…" autocomplete="off"
                  aria-autocomplete="list" aria-expanded="false" role="combobox"
                  class="w-full bg-ink border border-line rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-accent2" />
-          <!-- Typeahead suggestions sourced from movies.json. -->
+          <!-- Typeahead suggestions sourced from movies.pbf. -->
           <div id="movieSuggest" class="typeahead hidden card p-1" role="listbox"></div>
         </div>
         <button id="addMovieBtn" type="submit" class="btn btn-primary text-white font-semibold px-4 py-2.5 rounded-lg">
@@ -485,7 +491,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.7</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.8</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -721,35 +727,128 @@
   // punctuation so "Spider-Man" and "spider man" resolve to the same entry.
   const dbKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 
-  // Lookup key for a movie's embedding in window.EMBEDDINGS. Mirrors the Python
-  // build step (scripts/generate_embeddings.py): prefer an explicit `id`, else
-  // fall back to the punctuation-insensitive title key.
-  const embKey = (m) => (m && m.id != null && m.id !== '') ? String(m.id) : dbKey(m && m.title);
+  // Embedding vector dimensionality (must match scripts/generate_embeddings.py).
+  const EMBED_DIM = 384;
 
-  // Resolve a movie's static embedding vector, or null if embeddings.json
-  // hasn't loaded yet or this title has no vector.
+  // Resolve a movie's static embedding vector as a zero-copy Float32Array view
+  // straight out of the shared embeddings.bin ArrayBuffer, or null if the buffer
+  // hasn't loaded yet or this movie has no vector pointer. No text parsing, no
+  // per-call allocation of the data: we just slice the existing buffer by the
+  // movie's sequential v_idx pointer (byteOffset = vIdx * EMBED_DIM * 4).
   function movieEmbedding(m) {
-    const lut = window.EMBEDDINGS;
-    if (!lut || !m) return null;
-    const v = lut[embKey(m)];
-    return Array.isArray(v) && v.length ? v : null;
+    if (!window.EMBEDDINGS_BUFFER || !m || m.vIdx == null) return null;
+    const byteOffset = m.vIdx * EMBED_DIM * 4;
+    if (byteOffset + EMBED_DIM * 4 > window.EMBEDDINGS_BUFFER.byteLength) return null;
+    return new Float32Array(window.EMBEDDINGS_BUFFER, byteOffset, EMBED_DIM);
   }
 
+  // True once a vector (Array or typed Float32Array) of usable length is present.
+  const isVector = (v) => (Array.isArray(v) || ArrayBuffer.isView(v)) && v.length > 0;
+
   // ======================================================================
-  //  MOVIE RECOMMENDATION DATABASE (movies.json, loaded once at startup)
+  //  MOVIE RECOMMENDATION DATABASE (movies.pbf, loaded once at startup)
   // ======================================================================
-  // The catalogue is generated at build time by scripts/sync.py
-  // and served as a static asset, keeping the app fully serverless. Each entry:
-  // { title, year, primaryGenre, genres[], language, description, art, ratings:{...}, tmdb_id }.
+  // The catalogue is generated at build time by scripts/sync.py and served as a
+  // dense Protobuf binary (movies.pbf, schema in scripts/catalog.proto), keeping
+  // the app fully serverless while slashing transfer size and parse cost vs the
+  // old plain-text JSON. After decoding, each entry is inflated back to the
+  // descriptive runtime shape the UI expects:
+  // { title, year, primaryGenre, genres[], language, description, art, ratings:{...}, tmdb_id, vIdx }.
   let MOVIE_DB = [];
   const movieByTitle = new Map();   // normalized title -> db entry
   const movieByKey = new Map();     // looser dbKey -> db entry (punctuation-insensitive)
+
+  // Base TMDB poster domain. sync.py stores only the relative path suffix in the
+  // binary catalogue (e.g. "/lh4v5.jpg"); we re-prefix it here at load time.
+  const TMDB_IMAGE_BASE = 'https://image.tmdb.org/t/p/w342';
+
+  // Numeric Genre enum (catalog.proto) -> readable UI string. 99 = UNKNOWN.
+  const GENRE_STRINGS = {
+    1: 'Action', 2: 'Adventure', 3: 'Animation', 4: 'Comedy', 5: 'Crime',
+    6: 'Documentary', 7: 'Drama', 8: 'Family', 9: 'Fantasy', 10: 'History',
+    11: 'Horror', 12: 'Music', 13: 'Mystery', 14: 'Romance', 15: 'Science Fiction',
+    16: 'TV Movie', 17: 'Thriller', 18: 'War', 19: 'Western', 99: 'Unknown',
+  };
+  // Numeric LanguageCode enum (catalog.proto) -> ISO 639-1 code for the existing
+  // flag/name badge lookup. 0 (unspecified) and 99 (other) map to '' (no badge).
+  const LANGUAGE_STRINGS = {
+    1: 'en', 2: 'fr', 3: 'es', 4: 'de', 5: 'it', 6: 'pt', 7: 'ru',
+    8: 'ja', 9: 'ko', 10: 'zh', 11: 'hi',
+  };
+
+  // protobuf.js reflection descriptor for catalog.proto. Enum fields are read as
+  // plain int32 so unknown/future enum values still decode gracefully.
+  const CATALOG_PROTO = {
+    nested: { movie_night: { nested: {
+      Movie: { fields: {
+        id:                   { type: 'uint32', id: 1 },
+        year:                 { type: 'uint32', id: 2 },
+        language:             { type: 'int32',  id: 3 },
+        letterboxdRating:     { type: 'uint32', id: 4 },
+        rottenTomatoesRating: { type: 'uint32', id: 5 },
+        imdbRating:           { type: 'uint32', id: 6 },
+        primaryGenre:         { type: 'int32',  id: 7 },
+        genres:               { rule: 'repeated', type: 'int32', id: 8 },
+        title:                { type: 'string', id: 9 },
+        description:          { type: 'string', id: 10 },
+        artPath:              { type: 'string', id: 11 },
+        vIdx:                 { type: 'uint32', id: 12 },
+        director:             { rule: 'repeated', type: 'string', id: 13 },
+        cast:                 { rule: 'repeated', type: 'string', id: 14 },
+      } },
+      MovieCatalog: { fields: {
+        movies: { rule: 'repeated', type: 'Movie', id: 1 },
+      } },
+    } } },
+  };
+
+  // Inflate one decoded Protobuf Movie back into the descriptive runtime schema
+  // the rest of the app already understands. Scaled integer ratings are divided
+  // back to floats and numeric genre/language enums mapped to readable strings.
+  function inflateMovie(m) {
+    const genres = (m.genres || []).map((g) => GENRE_STRINGS[g]).filter(Boolean);
+    const primaryGenre = GENRE_STRINGS[m.primaryGenre] || genres[0] || '';
+    return {
+      id: m.id || undefined,
+      tmdb_id: m.id || undefined,
+      title: m.title || '',
+      year: m.year || undefined,
+      language: LANGUAGE_STRINGS[m.language] || '',
+      primaryGenre,
+      genres: genres.length ? genres : (primaryGenre ? [primaryGenre] : []),
+      description: m.description || '',
+      art: m.artPath ? (TMDB_IMAGE_BASE + m.artPath) : '',
+      ratings: {
+        imdb: m.imdbRating ? m.imdbRating / 10 : null,
+        rottenTomatoes: m.rottenTomatoesRating ? m.rottenTomatoesRating : null,
+        letterboxd: m.letterboxdRating ? m.letterboxdRating / 10 : null,
+      },
+      // Zero-based pointer into embeddings.bin (set at build time). Always a
+      // number after decode; the embedding fetch resolves it lazily.
+      vIdx: (m.vIdx != null ? m.vIdx : null),
+      cast: (m.cast && m.cast.length) ? m.cast : undefined,
+      director: (m.director && m.director.length) ? m.director : undefined,
+    };
+  }
+
+  // Compiled MovieCatalog decoder (lazily built from CATALOG_PROTO).
+  let _MovieCatalogType = null;
+  function movieCatalogType() {
+    if (_MovieCatalogType) return _MovieCatalogType;
+    if (typeof protobuf === 'undefined') return null;
+    const root = protobuf.Root.fromJSON(CATALOG_PROTO);
+    _MovieCatalogType = root.lookupType('movie_night.MovieCatalog');
+    return _MovieCatalogType;
+  }
 
   function indexMovieDb() {
     movieByTitle.clear();
     movieByKey.clear();
     MOVIE_DB.forEach((m) => {
       if (m && m.title) {
+        // Pre-compute the description keyword list once at startup so the hot
+        // scoring loop never re-runs the regex tokeniser per candidate.
+        m.keywords = extractKeywords(m.description);
         movieByTitle.set(normTitle(m.title), m);
         const k = dbKey(m.title);
         if (k && !movieByKey.has(k)) movieByKey.set(k, m);
@@ -767,35 +866,38 @@
 
   async function loadMovieDb() {
     try {
-      const res = await fetch('movies.json', { cache: 'no-cache' });
+      const res = await fetch('movies.pbf', { cache: 'no-cache' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      MOVIE_DB = Array.isArray(data) ? data : (data.movies || []);
+      const buf = await res.arrayBuffer();
+      const Catalog = movieCatalogType();
+      if (!Catalog) throw new Error('protobuf decoder unavailable');
+      const decoded = Catalog.decode(new Uint8Array(buf));
+      MOVIE_DB = (decoded.movies || []).map(inflateMovie);
     } catch (e) {
       // Recommendations are a progressive enhancement: the app still works for
-      // freeform titles if the catalogue can't be fetched (e.g. file://).
+      // freeform titles if the catalogue can't be fetched/decoded (e.g. file://).
       MOVIE_DB = [];
-      console.warn('Could not load movies.json:', e);
+      console.warn('Could not load movies.pbf:', e);
     }
     indexMovieDb();
     if (typeof renderAll === 'function') renderAll();
-    // Lazy-load the (much larger) embeddings map in the background so the UI is
-    // interactive immediately. Group-taste matching upgrades in once it arrives.
+    // Lazy-load the (much larger) embeddings binary in the background so the UI
+    // is interactive immediately. Group-taste matching upgrades in once it lands.
     loadEmbeddings();
   }
 
-  // Fetch embeddings.json after the catalogue is on screen and stash it in a
-  // global lookup keyed by movie id / normalised title. Failure is non-fatal:
-  // the engine simply falls back to neutral similarity scores.
+  // Fetch embeddings.bin after the catalogue is on screen and stash the raw bytes
+  // in a global ArrayBuffer. movieEmbedding() then slices zero-copy Float32Array
+  // views out of it by v_idx. Failure is non-fatal: the engine simply falls back
+  // to neutral similarity scores.
   async function loadEmbeddings() {
     try {
-      const res = await fetch('embeddings.json', { cache: 'no-cache' });
+      const res = await fetch('embeddings.bin', { cache: 'no-cache' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      const data = await res.json();
-      window.EMBEDDINGS = (data && typeof data === 'object' && !Array.isArray(data)) ? data : {};
+      window.EMBEDDINGS_BUFFER = await res.arrayBuffer();
     } catch (e) {
-      // Leave EMBEDDINGS undefined so the cosine helper keeps its 0.5 default.
-      console.warn('Could not load embeddings.json:', e);
+      // Leave EMBEDDINGS_BUFFER undefined so the cosine helper keeps its default.
+      console.warn('Could not load embeddings.bin:', e);
       return;
     }
     // Our own taste vector now resolves — recompute, re-share and re-render.
@@ -853,7 +955,7 @@
   }
 
   // My current taste vector (average embedding of movies I rated > 2.5), or null
-  // if I have no qualifying ratings or embeddings.json hasn't loaded yet.
+  // if I have no qualifying ratings or embeddings.bin hasn't loaded yet.
   function myTasteVector() {
     try { return buildTasteProfile().userVector || null; }
     catch (e) { return null; }
@@ -989,7 +1091,7 @@
       if (state.seen) state.seen[id] = mySeenShare();
       else state.seen = { [id]: mySeenShare() };
       // Seed the host's own taste vector for group matching (may be null until
-      // embeddings.json loads — it re-shares once that fetch completes).
+      // embeddings.bin loads — it re-shares once that fetch completes).
       shareVector();
       renderAll();
     });
@@ -1966,9 +2068,11 @@
 
   // ---------- cosine similarity ----------
   // Cosine similarity between two equal-length numeric vectors, in [-1, 1].
-  // Returns 0 when either vector is missing, mismatched, or zero-magnitude.
+  // Accepts plain Arrays (peer vectors over WebRTC, taste vectors) or typed
+  // Float32Array views (zero-copy embedding slices). Returns 0 when either
+  // vector is missing, mismatched, or zero-magnitude.
   function cosineSimilarity(a, b) {
-    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || a.length === 0) {
+    if (!isVector(a) || !isVector(b) || a.length !== b.length) {
       return 0;
     }
     let dot = 0, magA = 0, magB = 0;
@@ -1983,12 +2087,12 @@
   }
 
   // ---------- group-taste vibe ----------
-  // Cosine similarity used for group matching. When embeddings.json hasn't
+  // Cosine similarity used for group matching. When embeddings.bin hasn't
   // finished loading yet (or either vector is missing) we gracefully default to
   // a neutral 0.5 so recommendations still rank sensibly in the meantime.
   function vibeSimilarity(a, b) {
-    if (!window.EMBEDDINGS) return 0.5;
-    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length || a.length === 0) {
+    if (!window.EMBEDDINGS_BUFFER) return 0.5;
+    if (!isVector(a) || !isVector(b) || a.length !== b.length) {
       return 0.5;
     }
     return cosineSimilarity(a, b);
@@ -2000,12 +2104,12 @@
   function groupVibeScore(m, profile) {
     const emb = movieEmbedding(m);
     const sims = [];
-    if (Array.isArray(profile.userVector)) sims.push(vibeSimilarity(profile.userVector, emb));
+    if (isVector(profile.userVector)) sims.push(vibeSimilarity(profile.userVector, emb));
     const peerVectors = (state && state.peerVectors) || {};
     Object.keys(peerVectors).forEach((pid) => {
       if (pid === myId) return;                 // local taste is counted above
       const v = peerVectors[pid];
-      if (Array.isArray(v) && v.length) sims.push(vibeSimilarity(v, emb));
+      if (isVector(v)) sims.push(vibeSimilarity(v, emb));
     });
     // Nobody has a usable taste vector yet → neutral.
     const groupCosineScore = sims.length
@@ -2016,7 +2120,8 @@
   // Build a multi-signal profile from watched+rated movies and past nominations.
   // Each signal is a Map<feature, weight> where positive = liked, negative = disliked.
   // Returns { genreWeights, actorWeights, directorWeights, keywordWeights,
-  //           userVector, watchedCount, ratedCount, hasSignal }
+  //           userVector, dislikeVector, positiveSamples,
+  //           watchedCount, ratedCount, hasSignal }
   function buildTasteProfile() {
     const genreWeights    = new Map();
     const actorWeights    = new Map();
@@ -2037,22 +2142,60 @@
                  : (meta.director ? [meta.director] : []);
       dirs.forEach((d) =>
         directorWeights.set(d, (directorWeights.get(d) || 0) + strength * 1.2));
-      // Description keywords
-      extractKeywords(meta.description).forEach((kw) =>
+      // Description keywords (pre-tokenised once at startup; fall back lazily)
+      (meta.keywords || extractKeywords(meta.description)).forEach((kw) =>
         keywordWeights.set(kw, (keywordWeights.get(kw) || 0) + strength * 0.5));
+    }
+
+    // Weighted taste-vector accumulators. Positive (liked) movies feed the
+    // userVector; disliked movies feed a parallel dislikeVector whose alignment
+    // is later subtracted from candidate scores. Each contribution is scaled by
+    // how far the rating sits from neutral (2.5) and by an exponential recency
+    // decay (90-day preference half-life), so fresh, strong opinions dominate.
+    let userVector = null, userWeight = 0;
+    let dislikeVector = null, dislikeWeight = 0;
+    const positiveSamples = [];   // { title, emb } for "because you liked X"
+
+    function accumulate(target, emb, weight) {
+      if (!target) {
+        const out = new Array(emb.length);
+        for (let i = 0; i < emb.length; i++) out[i] = emb[i] * weight;
+        return out;
+      }
+      if (target.length !== emb.length) return target;
+      for (let i = 0; i < target.length; i++) target[i] += emb[i] * weight;
+      return target;
     }
 
     const watched = loadWatched();
     let rated = 0;
-    watched.forEach((w) => {
-      const meta = movieMeta(w.title);
+    watched.forEach((wEntry) => {
+      const meta = movieMeta(wEntry.title);
       if (!meta) return;
-      const r = w.rating || 0;
+      const r = wEntry.rating || 0;
       // Rated: signal proportional to how far from neutral (2.5).
       // Unrated (watched but not scored): mild positive.
-      const strength = r ? (r - 2.5) : 0.5;
+      const variance = r ? (r - 2.5) : 0.5;
       if (r) rated += 1;
-      applySignals(meta, strength);
+      applySignals(meta, variance);
+
+      // Recency decay: exp(-ageDays / 90) → recent ratings weigh ~e× more than
+      // ones from a quarter ago.
+      const dynamicAgeDays = (Date.now() - (wEntry.watchedAt || Date.now())) / (1000 * 60 * 60 * 24);
+      const recencyDecay = Math.exp(-dynamicAgeDays / 90);
+
+      const emb = movieEmbedding(meta);
+      if (!isVector(emb) || emb.length === 0) return;
+      if (variance > 0) {
+        const weight = variance * recencyDecay;
+        userVector = accumulate(userVector, emb, weight);
+        userWeight += weight;
+        positiveSamples.push({ title: meta.title, emb });
+      } else if (variance < 0) {
+        const weight = Math.abs(variance) * recencyDecay;
+        dislikeVector = accumulate(dislikeVector, emb, weight);
+        dislikeWeight += weight;
+      }
     });
 
     // Past nomination history: movies the viewer chose to nominate are a mild
@@ -2060,10 +2203,7 @@
     loadHistory().forEach((night) => {
       if (!Array.isArray(night.movies)) return;
       night.movies.forEach((entry) => {
-        // Only count titles nominated by this device (entries without a peer
-        // name, or where the name matches myName at recording time). As a safe
-        // heuristic, treat ALL nominations in stored history as self-nominated
-        // since the history is per-browser.
+        // Treat all stored nominations as self-nominated (history is per-browser).
         const meta = movieMeta(entry.title);
         if (!meta) return;
         // Slight positive signal, weaker than an explicit rating.
@@ -2082,50 +2222,41 @@
       });
     }
 
-    // Build the user "taste vector": the average embedding of every movie the
-    // user rated above neutral (> 2.5), looked up in window.EMBEDDINGS. The
-    // browser later ranks candidates by cosine similarity to this vector and
-    // broadcasts it to the room for group-taste matching.
-    let userVector = null;
-    let vectorCount = 0;
-    watched.forEach((wEntry) => {
-      if (!((wEntry.rating || 0) > 2.5)) return;
-      const meta = movieMeta(wEntry.title);
-      const emb = meta && movieEmbedding(meta);
-      if (!Array.isArray(emb) || emb.length === 0) return;
-      if (!userVector) {
-        userVector = emb.slice();
-      } else if (userVector.length === emb.length) {
-        for (let i = 0; i < userVector.length; i++) userVector[i] += emb[i];
-      } else {
-        return;
-      }
-      vectorCount += 1;
-    });
-    if (userVector && vectorCount > 0) {
-      for (let i = 0; i < userVector.length; i++) userVector[i] /= vectorCount;
+    // Convert the weighted sums into weighted *averages* so the taste vectors
+    // stay on the same scale as individual embeddings (cosine is scale-free, but
+    // this keeps the vectors stable as more history accumulates).
+    if (userVector && userWeight > 0) {
+      for (let i = 0; i < userVector.length; i++) userVector[i] /= userWeight;
+    }
+    if (dislikeVector && dislikeWeight > 0) {
+      for (let i = 0; i < dislikeVector.length; i++) dislikeVector[i] /= dislikeWeight;
     }
 
-    return { genreWeights, actorWeights, directorWeights, keywordWeights, userVector,
+    return { genreWeights, actorWeights, directorWeights, keywordWeights,
+             userVector, dislikeVector, positiveSamples,
              watchedCount: watched.length, ratedCount: rated, hasSignal };
   }
 
   // ---------- candidate scoring ----------
-  // Pure function: given a catalogue entry and a taste profile, return a score.
+  // Given a catalogue entry and a taste profile, return { score, why } where
+  // `why` is a short human-readable justification for the carousel badge.
   // Year-agnostic — recency is handled by the blend step so vintage classics that
   // perfectly match the viewer's taste are never unfairly buried.
   function scoreCandidate(m, profile) {
     const w   = REC_CONFIG.weights;
-    // Metadata features are *averages* over each feature list so that movies
-    // with long genre/cast lists aren't unfairly boosted by sheer volume.
+    // Metadata features are dampened by the *square root* of each feature list's
+    // length (rather than its raw length) so that movies with long genre/cast
+    // lists don't dilute explicit user-affinity signals down to noise.
     const genres = movieGenres(m);
-    const gen = genres.reduce((s, g) => s + (profile.genreWeights.get(g) || 0), 0) / (genres.length || 1);
+    const gen = genres.reduce((s, g) => s + (profile.genreWeights.get(g) || 0), 0) / Math.sqrt(genres.length || 1);
     const cast = Array.isArray(m.cast) ? m.cast : [];
-    const act = cast.reduce((s, a) => s + (profile.actorWeights.get(a) || 0), 0) / (cast.length || 1);
+    const act = cast.reduce((s, a) => s + (profile.actorWeights.get(a) || 0), 0) / Math.sqrt(cast.length || 1);
     const dirs = Array.isArray(m.director) ? m.director
                : (m.director ? [m.director] : []);
-    const dir  = dirs.reduce((s, d) => s + (profile.directorWeights.get(d) || 0), 0) / (dirs.length || 1);
-    const kws  = extractKeywords(m.description);
+    const dir  = dirs.reduce((s, d) => s + (profile.directorWeights.get(d) || 0), 0) / Math.sqrt(dirs.length || 1);
+    // Keyword affinity reuses the keyword list pre-computed at startup, so the
+    // hot scoring loop never re-runs the regex tokeniser per candidate.
+    const kws  = m.keywords || [];
     const kw   = kws.reduce((s, k) => s + (profile.keywordWeights.get(k) || 0), 0) / (kws.length || 1);
     const qual = qualityScore(m);
 
@@ -2133,8 +2264,39 @@
     // room's combined vibe (local user + every peer taste vector), in [0, 1].
     const groupCosineScore = groupVibeScore(m, profile);
 
-    return w.genre * gen + w.actor * act + w.director * dir + w.keyword * kw
-         + w.quality * qual + w.groupEmbedding * groupCosineScore;
+    let score = w.genre * gen + w.actor * act + w.director * dir + w.keyword * kw
+              + w.quality * qual + w.groupEmbedding * groupCosineScore;
+
+    // Negative-context alignment: penalise candidates that look like films the
+    // user actively disliked. Subtract half of the (positive) cosine alignment
+    // to the aggregated dislike vector.
+    const emb = movieEmbedding(m);
+    if (emb && isVector(profile.dislikeVector)) {
+      const dislikeAlign = Math.max(0, cosineSimilarity(emb, profile.dislikeVector));
+      score -= 0.5 * dislikeAlign;
+    }
+
+    // Identify the dominant scoring factor for an explainable badge. Find the
+    // single past favourite whose embedding best matches this candidate.
+    let bestFav = null;
+    if (emb && profile.positiveSamples && profile.positiveSamples.length) {
+      for (const sample of profile.positiveSamples) {
+        const sim = cosineSimilarity(emb, sample.emb);
+        if (!bestFav || sim > bestFav.sim) bestFav = { title: sample.title, sim };
+      }
+    }
+    const drivers = [
+      { key: 'group', val: w.groupEmbedding * groupCosineScore },
+      { key: 'fav',   val: bestFav ? w.groupEmbedding * ((bestFav.sim + 1) / 2) : -Infinity },
+      { key: 'genre', val: w.genre * Math.max(0, gen) },
+    ];
+    drivers.sort((a, b) => b.val - a.val);
+    let why;
+    if (drivers[0].key === 'fav' && bestFav) why = '🍿 Because you liked ' + bestFav.title;
+    else if (drivers[0].key === 'genre' && gen > 0) why = '✨ Fits your genre tastes';
+    else why = '👥 Matches group vibe';
+
+    return { score, why };
   }
 
   // Cold-start score: quality + small recency boost; no personalisation.
@@ -2145,26 +2307,49 @@
 
   // ---------- blend ----------
   // Interleave "new" films with the overall top picks so the viewer always sees
-  // a mix of fresh releases and unwatched films matched to their taste.
+  // a mix of fresh releases and unwatched films matched to their taste. A soft
+  // genre-diversity filter keeps the carousel from clustering near-identical
+  // neighbours: candidates whose primaryGenre is already in the tray have their
+  // score scaled by 0.85 before placement, within a bounded look-ahead window so
+  // the pass stays near-linear.
   function blendRecommendations(ranked, max) {
     const newTarget  = Math.round(max * REC_CONFIG.newFraction);
     const newRanked  = ranked.filter((r) => r.isNew);
     const out  = [];
     const used = new Set();
-    let ni = 0, pi = 0;
+    const trayGenres = new Set();   // primaryGenres already placed in the tray
+    const WINDOW = 12;              // bounded look-ahead keeps selection ~linear
+    let ni = 0, pi = 0, newCount = 0;
+
+    // Best candidate in `lane` from `startIdx`, applying the diversity penalty to
+    // same-genre candidates, scanning at most WINDOW unused entries.
+    function pickFrom(lane, startIdx) {
+      let best = null, bestVal = -Infinity, scanned = 0;
+      for (let i = startIdx; i < lane.length && scanned < WINDOW; i++) {
+        const rec = lane[i];
+        if (used.has(rec.movie)) continue;
+        scanned++;
+        const penalised = trayGenres.has(rec.movie.primaryGenre) ? rec.score * 0.85 : rec.score;
+        if (penalised > bestVal) { bestVal = penalised; best = rec; }
+      }
+      return best;
+    }
+
     while (out.length < max && (ni < newRanked.length || pi < ranked.length)) {
-      const wantNew = out.filter((r) => r.isNew).length < newTarget;
+      const wantNew = newCount < newTarget;
       let pick = null;
       if (wantNew) {
         while (ni < newRanked.length && used.has(newRanked[ni].movie)) ni++;
-        if (ni < newRanked.length) pick = newRanked[ni++];
+        pick = pickFrom(newRanked, ni);
       }
       if (!pick) {
         while (pi < ranked.length && used.has(ranked[pi].movie)) pi++;
-        if (pi < ranked.length) pick = ranked[pi++];
+        pick = pickFrom(ranked, pi);
       }
       if (!pick) break;
       used.add(pick.movie);
+      if (pick.isNew) newCount++;
+      if (pick.movie.primaryGenre) trayGenres.add(pick.movie.primaryGenre);
       out.push(pick);
     }
     return out;
@@ -2172,7 +2357,7 @@
 
   // ---------- main entry point ----------
   // Score the whole catalogue (excluding watched + already-nominated titles) and
-  // return a blended, ranked list of { movie, score, isNew, personalised } rows.
+  // return a blended, ranked list of { movie, score, why, isNew, personalised } rows.
   function computeRecommendations(maxResults = REC_CONFIG.maxResults) {
     if (!MOVIE_DB.length) return [];
     const profile      = buildTasteProfile();
@@ -2187,8 +2372,15 @@
       if (!m || !m.title || !m.art) continue;
       const nt = normTitle(m.title);
       if (seenSet.has(nt) || nominatedSet.has(nt)) continue;
-      const score = personalised ? scoreCandidate(m, profile) : coldStartScore(m);
-      candidates.push({ movie: m, score, isNew: isNewMovie(m), personalised });
+      let score, why = null;
+      if (personalised) {
+        const res = scoreCandidate(m, profile);
+        score = res.score;
+        why = res.why;
+      } else {
+        score = coldStartScore(m);
+      }
+      candidates.push({ movie: m, score, why, isNew: isNewMovie(m), personalised });
     }
     candidates.sort((a, b) => b.score - a.score);
     return blendRecommendations(candidates, maxResults);
@@ -2215,13 +2407,13 @@
     const noms = state.movies.map((m) => normTitle(m.title)).join('|');
     const hist = loadHistory().length;
     // Group-taste inputs: peers' shared seen lists + their taste vectors, plus
-    // whether embeddings.json has finished loading. Changes here re-rank recs.
+    // whether embeddings.bin has finished loading. Changes here re-rank recs.
     const seen = (state && state.seen) || {};
     const seenSig = Object.keys(seen).sort().map((pid) =>
       pid + ':' + (Array.isArray(seen[pid]) ? seen[pid].length : 0)).join('|');
     const pv = (state && state.peerVectors) || {};
     const pvSig = Object.keys(pv).sort().join('|');
-    const embReady = window.EMBEDDINGS ? '1' : '0';
+    const embReady = window.EMBEDDINGS_BUFFER ? '1' : '0';
     return MOVIE_DB.length + '#' + w + '#' + noms + '#' + hist
          + '#' + seenSig + '#' + pvSig + '#' + embReady;
   }
@@ -2252,6 +2444,7 @@
     const lang = languageBadgeHtml(m);
     const seen = seenIndicatorHtml(m.title);
     const safeTitle = escapeHtml(m.title);
+    const why = rec.why ? `<span class="rec-why" title="${escapeHtml(rec.why)}">${escapeHtml(rec.why)}</span>` : '';
     return `
       <div class="rec-card" role="listitem">
         <div class="relative">
@@ -2260,6 +2453,7 @@
         </div>
         <div class="p-2 flex flex-col gap-1 flex-1">
           <div class="rec-title text-xs font-medium leading-snug">${safeTitle}${m.year ? ` <span class="text-slate-500">(${escapeHtml(String(m.year))})</span>` : ''}</div>
+          ${why}
           ${seen || lang ? `<div class="flex items-center gap-1 flex-wrap text-[11px]">${seen}${lang}</div>` : ''}
           ${ratings ? `<div class="text-[10px] text-slate-400 truncate">${ratings}</div>` : ''}
           <button class="rec-nominate btn mt-auto w-full text-xs font-semibold py-1.5 rounded-lg ${canNominate ? 'btn-primary text-white' : 'opacity-40 cursor-not-allowed'}"
@@ -2856,7 +3050,7 @@
   }
 
   // Order the watched list for display. Release date comes from the catalogue
-  // (movies.json) when available; titles without a known year sort last.
+  // (movies.pbf) when available; titles without a known year sort last.
   function sortWatched(list, mode) {
     const byTitle = (a, b) => a.title.localeCompare(b.title, undefined, { sensitivity: 'base' });
     const releaseYear = (w) => {
