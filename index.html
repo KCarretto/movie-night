@@ -159,7 +159,7 @@
     .rec-track::-webkit-scrollbar { height: 6px; }
     .rec-track::-webkit-scrollbar-thumb { background: #2a3242; border-radius: 9999px; }
     .rec-card { scroll-snap-align: start; flex: 0 0 150px; width: 150px; background: #141821;
-      border: 1px solid #2a3242; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column;
+      border: 1px solid #2a3242; border-radius: 12px; overflow: visible; display: flex; flex-direction: column;
       cursor: pointer; transition: border-color .15s ease, transform .1s ease; }
     .rec-card:hover, .rec-card:focus-within { border-color: #7c5cff; }
     .rec-card:active { transform: translateY(1px); }
@@ -176,7 +176,7 @@
       font-size: 10px; line-height: 1.2; padding: 2px 6px; border-radius: 9999px;
       background: rgba(124,92,255,.14); color: #b9a7ff; border: 1px solid rgba(124,92,255,.28);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .rec-why-pop { position: absolute; left: 0; top: calc(100% + 6px); min-width: 180px;
+    .rec-why-pop { position: absolute; left: 0; bottom: calc(100% + 6px); min-width: 180px;
       max-width: 260px; z-index: 20; display: none; font-size: 11px; line-height: 1.35;
       color: #cbd5e1; padding: 8px 10px; white-space: normal; }
     .rec-why-wrap:hover .rec-why-pop, .rec-why-wrap:focus-within .rec-why-pop, .rec-why-wrap.open .rec-why-pop { display: block; }
@@ -254,6 +254,11 @@
             </div>
             <button id="syncDeviceBtn" type="button"
                     class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-qrcode w-4 mr-1.5 text-slate-400"></i>Sync</button>
+            <div class="my-1 border-t border-line"></div>
+            <button id="resetPreferencesBtn" type="button"
+                    class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2"><i class="fa-solid fa-rotate-left w-4 mr-1.5 text-slate-400"></i>Reset preferences</button>
+            <button id="deleteAllDataBtn" type="button"
+                    class="w-full text-left text-sm px-3 py-2 rounded-lg text-red-400 hover:bg-red-500/10"><i class="fa-solid fa-trash w-4 mr-1.5 text-red-400"></i>Delete all data</button>
           </div>
         </div>
       </div>
@@ -347,15 +352,14 @@
           <span id="recDataStatus" class="hidden inline-flex items-center" title="" aria-label="Recommendation data status">
             <span id="recDataStatusDot" class="dot" style="width:8px;height:8px;background:#facc15"></span>
           </span>
+          <button id="recTrainBtn" type="button" class="btn btn-primary text-white text-xs font-semibold px-2.5 py-1.5 rounded-lg" aria-label="Improve recommendations">
+            <i class="fa-solid fa-wand-magic-sparkles mr-1"></i>Improve
+          </button>
           <button id="recRefreshBtn" type="button" class="btn bg-panel2 border border-line text-xs font-semibold px-2.5 py-1.5 rounded-lg" aria-label="Refresh recommendations">
             <i class="fa-solid fa-rotate-right mr-1"></i>Refresh
           </button>
         </div>
       </div>
-      <!-- Train: opens a focused wizard to refine the user's taste vector. -->
-      <button id="recTrainBtn" type="button" class="btn btn-primary text-white w-full text-sm font-semibold py-2.5 rounded-lg" aria-label="Train your recommendations">
-        <i class="fa-solid fa-wand-magic-sparkles mr-1.5"></i>Train your recommendations
-      </button>
       <div class="relative">
         <button id="recPrev" type="button" class="rec-nav rec-prev" aria-label="Scroll recommendations left">
           <i class="fa-solid fa-chevron-left"></i>
@@ -527,7 +531,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 4</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 5</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -2537,7 +2541,7 @@
     ];
     drivers.sort((a, b) => b.val - a.val);
     let why;
-    if (drivers[0].key === 'fav' && bestFav) why = '🍿 Because you liked ' + bestFav.title;
+    if (drivers[0].key === 'fav' && bestFav) why = '🍿 ' + bestFav.title;
     else if (drivers[0].key === 'genre' && gen > 0) why = '✨ Fits your genre tastes';
     else why = '👥 Matches group vibe';
 
@@ -2772,16 +2776,16 @@
       : '';
     return `
       <div class="rec-card" role="listitem" data-title="${safeTitle}" tabindex="0" aria-label="View details for ${safeTitle}">
-        <div class="relative">
+        <div class="relative overflow-hidden rounded-t-xl">
           ${posterHtml(m, 'rec-poster')}
           ${rec.isNew ? '<span class="rec-badge">NEW</span>' : ''}
         </div>
         <div class="p-2 flex flex-col gap-1 flex-1">
           <div class="rec-title text-xs font-medium leading-snug">${safeTitle}${m.year ? ` <span class="text-slate-500">(${escapeHtml(String(m.year))})</span>` : ''}</div>
-          ${why}
           <div class="mt-auto space-y-1">
             ${seen || lang ? `<div class="flex items-center gap-1 flex-wrap text-[11px]">${seen}${lang}</div>` : ''}
             ${ratings ? `<div class="text-[10px] text-slate-400 truncate">${ratings}</div>` : ''}
+            ${why}
             <button class="rec-nominate btn w-full text-xs font-semibold py-1.5 rounded-lg ${canNominate ? 'btn-primary text-white' : 'opacity-40 cursor-not-allowed'}"
                     data-title="${safeTitle}" ${canNominate ? '' : 'disabled'}>
               <i class="fa-solid fa-plus mr-1"></i>Nominate
@@ -2888,6 +2892,7 @@
     const empty = $('#recEmpty');
     const subtitle = section && section.querySelector('.rec-subtitle');
     if (!section || !track) return;
+    if (trainModalOpen) return;
 
     const hasMovieDbError = movieDbStatus === 'error';
     // Only relevant while nominating. If the catalogue fails to load, keep the
@@ -2981,6 +2986,8 @@
   let trainQueue = [];
   let trainCurrent = null;
   let trainPendingAction = null;   // 'watched' | 'interested' while rating
+  let trainModalOpen = false;
+  let trainPrerenderedCardHtml = null;
 
   // Build a fresh queue of candidate movies for training, skipping anything the
   // user has already acted on (watched / watchlisted / rated-interest / skipped).
@@ -2996,26 +3003,73 @@
     return ranked.map((r) => r.movie).filter((m) => m && !acted.has(normTitle(m.title)));
   }
 
+  // Pre-render the next card in the queue to be served instantly.
+  function prerenderNextTrainCard() {
+    const nextMovie = trainQueue[0];
+    if (!nextMovie) {
+      trainPrerenderedCardHtml = null;
+      return;
+    }
+    const m = nextMovie;
+    const safeTitle = escapeHtml(m.title || '');
+    const year = m.year ? ` <span class="text-slate-400">(${escapeHtml(String(m.year))})</span>` : '';
+    const genres = genreTagsHtml(m);
+    const lang = languageBadgeHtml(m);
+    const ratings = ratingsLine(m);
+    const description = m.description
+      ? `<p class="text-xs text-slate-400 leading-relaxed line-clamp-4">${escapeHtml(m.description)}</p>`
+      : '';
+    trainPrerenderedCardHtml = `
+      <div class="flex gap-3">
+        <div class="shrink-0">${posterHtml(m, 'w-24 h-36')}</div>
+        <div class="min-w-0 space-y-1.5">
+          <div class="font-display text-lg leading-tight">${safeTitle}${year}</div>
+          ${genres ? `<div class="flex flex-wrap gap-1">${genres}</div>` : ''}
+          ${lang ? `<div class="text-xs">${lang}</div>` : ''}
+          ${ratings ? `<div class="text-[11px] text-slate-400">${ratings}</div>` : ''}
+        </div>
+      </div>
+      ${description}`;
+  }
+
+  // Pre-fetch poster images of the next few movies in the queue.
+  function prefetchNextTrainMovies(count = 5) {
+    for (let i = 0; i < Math.min(count, trainQueue.length); i++) {
+      const m = trainQueue[i];
+      if (m && m.art) {
+        const img = new Image();
+        img.src = m.art;
+      }
+    }
+  }
+
   function openTraining() {
     if (!MOVIE_DB.length) return;
+    trainModalOpen = true;
     trainQueue = buildTrainQueue();
     trainCurrent = null;
+    trainPrerenderedCardHtml = null;
     const modal = $('#trainModal');
     if (modal) modal.classList.remove('hidden');
     trainNext();
   }
 
   function closeTraining() {
+    trainModalOpen = false;
     const modal = $('#trainModal');
     if (modal) modal.classList.add('hidden');
     hideTrainRate();
+    renderAll();
   }
 
   // Advance to the next training card, rebuilding the queue when it empties so
   // the newest signals are reflected.
   function trainNext() {
     hideTrainRate();
-    if (!trainQueue.length) trainQueue = buildTrainQueue();
+    if (!trainQueue.length) {
+      trainQueue = buildTrainQueue();
+      trainPrerenderedCardHtml = null;
+    }
     trainCurrent = trainQueue.shift() || null;
     renderTrainCard();
   }
@@ -3033,26 +3087,35 @@
     }
     if (empty) empty.classList.add('hidden');
     if (actions) actions.classList.remove('hidden');
-    const m = trainCurrent;
-    const safeTitle = escapeHtml(m.title || '');
-    const year = m.year ? ` <span class="text-slate-400">(${escapeHtml(String(m.year))})</span>` : '';
-    const genres = genreTagsHtml(m);
-    const lang = languageBadgeHtml(m);
-    const ratings = ratingsLine(m);
-    const description = m.description
-      ? `<p class="text-xs text-slate-400 leading-relaxed line-clamp-4">${escapeHtml(m.description)}</p>`
-      : '';
-    body.innerHTML = `
-      <div class="flex gap-3">
-        <div class="shrink-0">${posterHtml(m, 'w-24 h-36')}</div>
-        <div class="min-w-0 space-y-1.5">
-          <div class="font-display text-lg leading-tight">${safeTitle}${year}</div>
-          ${genres ? `<div class="flex flex-wrap gap-1">${genres}</div>` : ''}
-          ${lang ? `<div class="text-xs">${lang}</div>` : ''}
-          ${ratings ? `<div class="text-[11px] text-slate-400">${ratings}</div>` : ''}
+
+    if (trainPrerenderedCardHtml) {
+      body.innerHTML = trainPrerenderedCardHtml;
+    } else {
+      const m = trainCurrent;
+      const safeTitle = escapeHtml(m.title || '');
+      const year = m.year ? ` <span class="text-slate-400">(${escapeHtml(String(m.year))})</span>` : '';
+      const genres = genreTagsHtml(m);
+      const lang = languageBadgeHtml(m);
+      const ratings = ratingsLine(m);
+      const description = m.description
+        ? `<p class="text-xs text-slate-400 leading-relaxed line-clamp-4">${escapeHtml(m.description)}</p>`
+        : '';
+      body.innerHTML = `
+        <div class="flex gap-3">
+          <div class="shrink-0">${posterHtml(m, 'w-24 h-36')}</div>
+          <div class="min-w-0 space-y-1.5">
+            <div class="font-display text-lg leading-tight">${safeTitle}${year}</div>
+            ${genres ? `<div class="flex flex-wrap gap-1">${genres}</div>` : ''}
+            ${lang ? `<div class="text-xs">${lang}</div>` : ''}
+            ${ratings ? `<div class="text-[11px] text-slate-400">${ratings}</div>` : ''}
+          </div>
         </div>
-      </div>
-      ${description}`;
+        ${description}`;
+    }
+
+    // Prepare next card's pre-rendered HTML and prefetch posters
+    prerenderNextTrainCard();
+    prefetchNextTrainMovies(5);
   }
 
   // Show the star sub-prompt for "Watched" / "Interested".
@@ -3813,6 +3876,32 @@
     if (currentView === 'history') renderHistory();
   }
 
+  function resetPreferences() {
+    if (!confirm('Are you sure you want to reset your training data? This will clear your watchlist, interested ratings, and not-interested skips.')) return;
+    localStorage.removeItem(WATCHLIST_KEY);
+    localStorage.removeItem(INTERESTED_KEY);
+    localStorage.removeItem(NOT_INTERESTED_KEY);
+    trainQueue = [];
+    trainCurrent = null;
+    trainPrerenderedCardHtml = null;
+    afterTasteChange();
+    if (typeof renderAll === 'function') renderAll();
+    alert('Training data has been reset.');
+  }
+
+  function deleteAllData() {
+    if (!confirm('Are you sure you want to delete all data? This will delete your name, history, ratings, watchlist, and training preferences, and reset the app.')) return;
+    localStorage.removeItem(NAME_STORAGE_KEY);
+    localStorage.removeItem(HISTORY_KEY);
+    localStorage.removeItem(WATCHED_KEY);
+    localStorage.removeItem(WATCHLIST_KEY);
+    localStorage.removeItem(INTERESTED_KEY);
+    localStorage.removeItem(NOT_INTERESTED_KEY);
+    try { sessionStorage.removeItem(HOST_ROOM_KEY); } catch (e) {}
+    try { sessionStorage.removeItem(REC_SESSION_SEEN_KEY); } catch (e) {}
+    window.location.reload();
+  }
+
   // ---- Import confirm dialog (used by file import + device sync) ----
   let pendingImport = null;
   function openImportConfirm(data, sourceLabel) {
@@ -4176,6 +4265,8 @@
     $('#importDataBtn').addEventListener('click', () => { closeSettingsMenu(); $('#importFileInput').click(); });
     $('#importLetterboxdBtn').addEventListener('click', () => { closeSettingsMenu(); $('#letterboxdFileInput').click(); });
     $('#syncDeviceBtn').addEventListener('click', () => { closeSettingsMenu(); openSyncModal(); });
+    $('#resetPreferencesBtn').addEventListener('click', () => { closeSettingsMenu(); resetPreferences(); });
+    $('#deleteAllDataBtn').addEventListener('click', () => { closeSettingsMenu(); deleteAllData(); });
 
     // Letterboxd import instructions: toggle on click, reveal on hover.
     const lbInfoBtn = $('#letterboxdInfoBtn');
