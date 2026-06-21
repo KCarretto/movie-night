@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-  <title>🎬 Movie Night — P2P Ranked-Choice Voting</title>
+  <title>🎬 Plot Polls — P2P Ranked-Choice Voting</title>
 
   <!-- ===== External dependencies (all via CDN, no build step) ===== -->
   <!-- Tailwind CSS for fast, clean, responsive styling -->
@@ -132,17 +132,37 @@
     .seen-pop { position: absolute; right: 0; top: calc(100% + 6px); min-width: 180px; z-index: 50;
       display: none; }
     .seen-wrap:hover .seen-pop, .seen-wrap.open .seen-pop { display: block; }
+
+    /* Genre chips on ranked choices. */
+    .genre-tag { font-size: 10px; line-height: 1; padding: 3px 7px; border-radius: 9999px;
+      background: #1c212d; border: 1px solid #2a3242; color: #b9c2d0; white-space: nowrap; }
+
+    /* Description tooltip shown when hovering/focusing a ranked choice. */
+    .desc-wrap { position: relative; }
+    .desc-pop { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 50;
+      display: none; font-size: 12px; line-height: 1.4; color: #cbd5e1; padding: 10px 12px; }
+    .desc-wrap:hover .desc-pop, .desc-wrap:focus-within .desc-pop, .desc-wrap.open .desc-pop { display: block; }
+
+    /* Backdrop collage built from the art of the currently nominated movies.
+       Sits behind everything as a soft, blurred wash so the UI stays readable. */
+    #bgArt { position: fixed; inset: 0; z-index: -1; pointer-events: none;
+      background-size: cover; background-position: center; background-repeat: no-repeat;
+      filter: blur(28px) saturate(1.1) brightness(.42); transform: scale(1.12);
+      opacity: 0; transition: opacity .8s ease; }
+    #bgArt.show { opacity: 1; }
   </style>
 </head>
 
 <body class="text-slate-200 min-h-full">
+  <!-- Dynamic backdrop: a blurred collage of the nominated movies' poster art. -->
+  <div id="bgArt" aria-hidden="true"></div>
   <!-- ============================ HEADER ============================ -->
   <header class="sticky top-0 z-30 backdrop-blur bg-ink/70 border-b border-line">
     <div class="max-w-3xl mx-auto px-4 py-3 flex items-center gap-3">
       <a href="#" id="homeLink" class="flex items-center gap-3 flex-1 min-w-0" title="Start a new room">
         <div class="text-2xl">🎬</div>
         <div class="min-w-0">
-          <h1 class="font-display text-2xl leading-none">MOVIE NIGHT</h1>
+          <h1 class="font-display text-2xl leading-none">PLOT POLLS</h1>
           <p class="text-[11px] text-slate-400 -mt-0.5">P2P Ranked-Choice Voting</p>
         </div>
       </a>
@@ -177,13 +197,6 @@
             <div class="text-[11px] uppercase tracking-wider text-slate-400">You are</div>
             <div id="youLabel" class="font-semibold">…</div>
           </div>
-        </div>
-      </div>
-
-      <!-- Editable display name. Defaults to a fun nickname placeholder. -->
-      <div class="mt-4">
-        <div class="flex items-center justify-between">
-          <label for="nameInput" class="text-[11px] uppercase tracking-wider text-slate-400">Your name</label>
           <!-- Settings cog (shown once a name has been chosen). -->
           <div id="settingsWrap" class="hidden relative">
             <button id="settingsBtn" type="button" aria-haspopup="true" aria-expanded="false"
@@ -195,10 +208,13 @@
             </div>
           </div>
         </div>
+      </div>
 
-        <!-- Display view: shown after the name has been set once. -->
-        <div id="nameDisplay" class="hidden mt-1">
-          <div id="nameDisplayValue" class="font-semibold text-lg truncate">…</div>
+      <!-- Editable display name. Hidden entirely once a name has been set (the
+           chosen name then shows under "You are"; the cog re-opens this editor). -->
+      <div id="nameSection" class="mt-4">
+        <div class="flex items-center justify-between">
+          <label for="nameInput" class="text-[11px] uppercase tracking-wider text-slate-400">Your name</label>
         </div>
 
         <!-- Edit view: the input + Save button. -->
@@ -365,7 +381,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.6</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.7</b>
   </footer>
 
   <!-- ===================== START-VOTING CONFIRM MODAL ===================== -->
@@ -531,6 +547,9 @@
   const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const normTitle = (s) => String(s || '').trim().toLowerCase();
+  // Looser key for catalogue matching: case-insensitive, ignores spaces and
+  // punctuation so "Spider-Man" and "spider man" resolve to the same entry.
+  const dbKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 
   // ======================================================================
   //  MOVIE RECOMMENDATION DATABASE (movies.json, loaded once at startup)
@@ -540,10 +559,26 @@
   // { title, year, primaryGenre, genres[], description, art, ratings:{...} }.
   let MOVIE_DB = [];
   const movieByTitle = new Map();   // normalized title -> db entry
+  const movieByKey = new Map();     // looser dbKey -> db entry (punctuation-insensitive)
 
   function indexMovieDb() {
     movieByTitle.clear();
-    MOVIE_DB.forEach((m) => { if (m && m.title) movieByTitle.set(normTitle(m.title), m); });
+    movieByKey.clear();
+    MOVIE_DB.forEach((m) => {
+      if (m && m.title) {
+        movieByTitle.set(normTitle(m.title), m);
+        const k = dbKey(m.title);
+        if (k && !movieByKey.has(k)) movieByKey.set(k, m);
+      }
+    });
+  }
+
+  // Look up a catalogue entry for a nominated title. Falls back to the looser
+  // punctuation-insensitive key so freeform titles still match when they line
+  // up with a known movie (case/space/special-character differences aside).
+  function movieMeta(title) {
+    if (!title) return null;
+    return movieByTitle.get(normTitle(title)) || movieByKey.get(dbKey(title)) || null;
   }
 
   async function loadMovieDb() {
@@ -1205,6 +1240,7 @@
     renderPeers();
     renderPhase();
     renderMovies();
+    updateBackground();
     renderNameField();
     renderBallotIfNeeded();
     renderVoteProgress();
@@ -1230,15 +1266,14 @@
     const nameSet = !!loadSavedName();
     const showEditor = editingName || !nameSet;
 
-    const form = $('#nameForm');
-    const display = $('#nameDisplay');
+    // Once a name is set we hide the whole "Your name" editor — the chosen name
+    // already shows under "You are" — and expose the settings cog to change it.
+    const section = $('#nameSection');
     const settings = $('#settingsWrap');
-    if (form) form.classList.toggle('hidden', !showEditor);
-    if (display) display.classList.toggle('hidden', showEditor);
+    if (section) section.classList.toggle('hidden', !showEditor);
     if (settings) settings.classList.toggle('hidden', !nameSet);
 
-    const value = $('#nameDisplayValue');
-    if (value) value.textContent = current || '…';
+    if (nameSet && !showEditor) $('#youLabel').textContent = current || '…';
   }
 
   function renderPeers() {
@@ -1304,6 +1339,40 @@
     box.classList.toggle('text-slate-300', !everyone);
   }
 
+  // Build a soft, blurred backdrop from the poster art of the nominated movies
+  // so the page takes on the flavour of the current options. Falls back to the
+  // plain gradient when none of the nominations have catalogue art.
+  let bgArtSig = '';
+  function updateBackground() {
+    const bg = $('#bgArt');
+    if (!bg) return;
+    const arts = [];
+    const seen = new Set();
+    state.movies.forEach((m) => {
+      const meta = movieMeta(m.title);
+      if (meta && meta.art && !seen.has(meta.art)) { seen.add(meta.art); arts.push(meta.art); }
+    });
+    const sig = arts.join('|');
+    if (sig === bgArtSig) return;   // nothing changed; avoid reflowing the layers
+    bgArtSig = sig;
+    if (!arts.length) {
+      bg.classList.remove('show');
+      bg.style.backgroundImage = '';
+      return;
+    }
+    // Tile the posters edge-to-edge as a horizontal strip behind the heavy blur.
+    const n = arts.length;
+    const step = 100 / n;
+    const layers = arts.map((url) => `url("${url}")`).reverse().join(', ');
+    const sizes = arts.map(() => `${step}% 100%`).reverse().join(', ');
+    // Spread the poster tiles evenly across the full width.
+    const pos = arts.map((_, i) => `${n === 1 ? 50 : (i * 100) / (n - 1)}% center`).reverse().join(', ');
+    bg.style.backgroundImage = layers;
+    bg.style.backgroundSize = sizes;
+    bg.style.backgroundPosition = pos;
+    bg.classList.add('show');
+  }
+
   function renderMovies() {
     const list = $('#movieList');
     list.innerHTML = '';
@@ -1311,13 +1380,20 @@
 
     const canEdit = state.phase === 'lobby';
     state.movies.forEach((m, i) => {
+      const meta = movieMeta(m.title);
       const li = el('li', 'flex items-center gap-3 bg-panel2 border border-line rounded-lg px-3 py-2');
       const who = (state.peers.find((p) => p.id === m.by) || {}).name || 'Someone';
       const mineMovie = m.by === myId;
+      const ratings = meta ? ratingsLine(meta) : '';
       li.innerHTML = `
-        <span class="font-display text-xl text-slate-500 w-6 text-center">${i + 1}</span>
-        <span class="flex-1 text-sm font-medium truncate">${escapeHtml(m.title)}</span>
-        ${seenIndicatorHtml(m.title)}
+        ${meta ? posterHtml(meta, 'w-9 h-12') : `<span class="font-display text-xl text-slate-500 w-6 text-center">${i + 1}</span>`}
+        <span class="flex-1 min-w-0">
+          <span class="flex items-center gap-2">
+            <span class="text-sm font-medium truncate">${escapeHtml(meta && meta.title ? meta.title : m.title)}${meta && meta.year ? ` <span class="text-slate-500">(${escapeHtml(String(meta.year))})</span>` : ''}</span>
+            ${seenIndicatorHtml(m.title)}
+          </span>
+          ${ratings ? `<span class="block text-[11px] text-slate-400 truncate">${ratings}</span>` : ''}
+        </span>
         <span class="text-[10px] text-slate-500">by ${escapeHtml(who)}</span>
         ${mineMovie && canEdit
           ? `<button class="remove-movie btn w-7 h-7 rounded bg-ink border border-line text-sm leading-none text-slate-400 hover:text-accent" aria-label="Remove movie" title="Remove"><i class="fa-solid fa-trash"></i></button>`
@@ -1377,6 +1453,12 @@
     if (r.rottenTomatoes != null) bits.push(`<span title="Rotten Tomatoes">🍅 ${escapeHtml(String(r.rottenTomatoes))}%</span>`);
     if (r.letterboxd != null) bits.push(`<span title="Letterboxd (estimated)">📊 ${escapeHtml(String(r.letterboxd))}</span>`);
     return bits.join(' · ');
+  }
+
+  // Render up to three genre chips for a catalogue entry (empty string if none).
+  function genreTagsHtml(m) {
+    const genres = (m && m.genres && m.genres.length ? m.genres : (m && m.primaryGenre ? [m.primaryGenre] : []));
+    return genres.slice(0, 3).map((g) => `<span class="genre-tag">${escapeHtml(g)}</span>`).join('');
   }
 
   function posterHtml(m, sizeCls) {
@@ -1478,13 +1560,20 @@
     ballotOrder.forEach((id, idx) => {
       const movie = state.movies.find((m) => m.id === id);
       if (!movie) return;
+      const meta = movieMeta(movie.title);
+      const tags = meta ? genreTagsHtml(meta) : '';
+      const desc = meta && meta.description ? meta.description : '';
       const li = el('li', 'rank-row flex items-center gap-2 bg-panel2 border border-line rounded-lg px-3 py-2.5');
       li.dataset.id = id;
       const isTop = idx === 0;
       const isBottom = idx === lastIdx;
       li.innerHTML = `
         <span class="rank-num font-display text-2xl text-accent2 w-7 text-center">${idx + 1}</span>
-        <span class="flex-1 text-sm font-medium truncate">${escapeHtml(movie.title)}</span>
+        <span class="flex-1 min-w-0 ${desc ? 'desc-wrap' : ''}" ${desc ? 'tabindex="0"' : ''}>
+          <span class="block text-sm font-medium truncate">${escapeHtml(movie.title)}</span>
+          ${tags ? `<span class="flex flex-wrap gap-1 mt-1">${tags}</span>` : ''}
+          ${desc ? `<span class="desc-pop card">${escapeHtml(desc)}</span>` : ''}
+        </span>
         <span class="flex flex-col gap-1">
           <button data-dir="up" class="up btn w-7 h-7 rounded bg-ink border border-line text-xs leading-none ${isTop ? 'invisible' : ''}" aria-label="Move up" ${isTop ? 'tabindex="-1"' : ''}>▲</button>
           <button data-dir="down" class="down btn w-7 h-7 rounded bg-ink border border-line text-xs leading-none ${isBottom ? 'invisible' : ''}" aria-label="Move down" ${isBottom ? 'tabindex="-1"' : ''}>▼</button>
