@@ -3144,6 +3144,82 @@
   }
 
   // ======================================================================
+  //  RATE MODAL FOR RECOMMENDED WATCHED
+  // ======================================================================
+  let rateModalPendingTitle = null;
+
+  function openRateModal(title) {
+    rateModalPendingTitle = title;
+    const modal = $('#rateModal');
+    const heading = $('#rateModalTitle');
+    const stars = $('#rateModalStars');
+    if (!modal || !heading || !stars) return;
+    heading.textContent = `RATE: ${title}`;
+    stars.dataset.title = title;
+    stars.innerHTML = starSelectorInner(0);
+    modal.classList.remove('hidden');
+  }
+
+  function closeRateModal() {
+    const modal = $('#rateModal');
+    if (modal) modal.classList.add('hidden');
+    rateModalPendingTitle = null;
+  }
+
+  function wireRateModal() {
+    const backdrop = $('#rateModalBackdrop');
+    if (backdrop) backdrop.addEventListener('click', closeRateModal);
+    const closeBtn = $('#closeRateModalBtn');
+    if (closeBtn) closeBtn.addEventListener('click', closeRateModal);
+    const skipBtn = $('#rateModalSkipBtn');
+    if (skipBtn) skipBtn.addEventListener('click', () => {
+      if (rateModalPendingTitle) {
+        if (inWatchlist(rateModalPendingTitle)) {
+          removeFromWatchlistSilent(rateModalPendingTitle);
+        }
+        upsertWatched(rateModalPendingTitle, 0);
+        closeRateModal();
+      }
+    });
+
+    const stars = $('#rateModalStars');
+    if (stars) {
+      stars.addEventListener('click', (e) => {
+        const star = e.target.closest && e.target.closest('i[data-rate]');
+        if (!star) return;
+        const rating = Number(star.dataset.rate) || 0;
+        if (rateModalPendingTitle) {
+          if (inWatchlist(rateModalPendingTitle)) {
+            removeFromWatchlistSilent(rateModalPendingTitle);
+          }
+          upsertWatched(rateModalPendingTitle, rating);
+          closeRateModal();
+        }
+      });
+      stars.addEventListener('mouseover', (e) => {
+        const star = e.target.closest && e.target.closest('i[data-rate]');
+        if (!star) return;
+        const rate = Number(star.dataset.rate) || 0;
+        const starIcons = stars.querySelectorAll('i[data-rate]');
+        starIcons.forEach((s) => {
+          const sRate = Number(s.dataset.rate) || 0;
+          if (sRate <= rate) {
+            s.className = 'fa-solid text-gold fa-star cursor-pointer';
+          } else {
+            s.className = 'fa-regular text-slate-600 fa-star cursor-pointer';
+          }
+        });
+      });
+      stars.addEventListener('mouseout', () => {
+        const starIcons = stars.querySelectorAll('i[data-rate]');
+        starIcons.forEach((s) => {
+          s.className = 'fa-regular text-slate-600 fa-star cursor-pointer';
+        });
+      });
+    }
+  }
+
+  // ======================================================================
   //  TASTE-TRAINING WIZARD
   // ======================================================================
   // Presents one movie at a time with four actions (Not interested / Watched /
