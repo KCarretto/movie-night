@@ -1,0 +1,7 @@
+# TMDB daily id exports downloaded by the sync workflow / scripts/sync.py.
+movie_ids_*.json
+movie_ids_*.json.gz
+
+# Python bytecode cache.
+__pycache__/
+*.pyc
