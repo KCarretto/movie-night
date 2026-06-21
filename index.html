@@ -553,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 11</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 12</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -633,6 +633,28 @@
         </button>
       </div>
       <div id="recDetailBody" class="space-y-3"></div>
+    </div>
+  </div>
+
+  <!-- ===================== RATE MOVIE MODAL ===================== -->
+  <div id="rateModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div id="rateModalBackdrop" class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
+    <div class="card relative z-10 max-w-sm w-full p-5 space-y-4">
+      <div class="flex items-center justify-between gap-3">
+        <h3 id="rateModalTitle" class="font-display text-xl truncate text-left uppercase tracking-wider text-slate-100">RATE MOVIE</h3>
+        <button id="closeRateModalBtn" class="btn w-8 h-8 rounded-lg bg-panel2 border border-line text-slate-300" aria-label="Close">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="space-y-4 text-center">
+        <p class="text-sm text-slate-300">How would you rate this movie?</p>
+        <div class="flex flex-col items-center justify-center gap-2 py-2">
+          <div id="rateModalStars" class="rate-modal-stars inline-flex gap-1 text-3xl" data-title=""></div>
+        </div>
+        <div class="flex gap-2 pt-2">
+          <button id="rateModalSkipBtn" class="btn flex-1 bg-panel2 border border-line text-xs font-semibold py-2.5 rounded-lg text-slate-300">Mark Watched (No Rating)</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -2927,6 +2949,10 @@
                     data-title="${safeTitle}" aria-pressed="${onList ? 'true' : 'false'}">
               <i class="fa-${onList ? 'solid' : 'regular'} fa-bookmark mr-1"></i>${onList ? 'Added to Watchlist' : 'Add to Watchlist'}
             </button>
+            <button class="rec-watched btn w-full text-xs font-semibold py-1.5 rounded-lg bg-panel2 border border-line text-slate-300"
+                    data-title="${safeTitle}">
+              <i class="fa-regular fa-circle-check mr-1"></i>Watched
+            </button>
           </div>
         </div>
       </div>`;
@@ -3086,13 +3112,19 @@
         }
       });
     });
+    track.querySelectorAll('.rec-watched').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openRateModal(btn.dataset.title || '');
+      });
+    });
     track.querySelectorAll('.rec-card').forEach((card) => {
       card.addEventListener('click', (e) => {
-        if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-why-wrap')) return;
+        if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-why-wrap')) return;
         openRecommendationDetail(card.dataset.title || '');
       });
       card.addEventListener('keydown', (e) => {
-        if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-why-wrap')) return;
+        if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-why-wrap')) return;
         e.preventDefault();
         openRecommendationDetail(card.dataset.title || '');
       });
@@ -3115,6 +3147,82 @@
       try { renderRecommendations(true); }
       finally { showRecSpinner(false); }
     }));
+  }
+
+  // ======================================================================
+  //  RATE MODAL FOR RECOMMENDED WATCHED
+  // ======================================================================
+  let rateModalPendingTitle = null;
+
+  function openRateModal(title) {
+    rateModalPendingTitle = title;
+    const modal = $('#rateModal');
+    const heading = $('#rateModalTitle');
+    const stars = $('#rateModalStars');
+    if (!modal || !heading || !stars) return;
+    heading.textContent = `RATE: ${title}`;
+    stars.dataset.title = title;
+    stars.innerHTML = starSelectorInner(0);
+    modal.classList.remove('hidden');
+  }
+
+  function closeRateModal() {
+    const modal = $('#rateModal');
+    if (modal) modal.classList.add('hidden');
+    rateModalPendingTitle = null;
+  }
+
+  function wireRateModal() {
+    const backdrop = $('#rateModalBackdrop');
+    if (backdrop) backdrop.addEventListener('click', closeRateModal);
+    const closeBtn = $('#closeRateModalBtn');
+    if (closeBtn) closeBtn.addEventListener('click', closeRateModal);
+    const skipBtn = $('#rateModalSkipBtn');
+    if (skipBtn) skipBtn.addEventListener('click', () => {
+      if (rateModalPendingTitle) {
+        if (inWatchlist(rateModalPendingTitle)) {
+          removeFromWatchlistSilent(rateModalPendingTitle);
+        }
+        upsertWatched(rateModalPendingTitle, 0);
+        closeRateModal();
+      }
+    });
+
+    const stars = $('#rateModalStars');
+    if (stars) {
+      stars.addEventListener('click', (e) => {
+        const star = e.target.closest && e.target.closest('i[data-rate]');
+        if (!star) return;
+        const rating = Number(star.dataset.rate) || 0;
+        if (rateModalPendingTitle) {
+          if (inWatchlist(rateModalPendingTitle)) {
+            removeFromWatchlistSilent(rateModalPendingTitle);
+          }
+          upsertWatched(rateModalPendingTitle, rating);
+          closeRateModal();
+        }
+      });
+      stars.addEventListener('mouseover', (e) => {
+        const star = e.target.closest && e.target.closest('i[data-rate]');
+        if (!star) return;
+        const rate = Number(star.dataset.rate) || 0;
+        const starIcons = stars.querySelectorAll('i[data-rate]');
+        starIcons.forEach((s) => {
+          const sRate = Number(s.dataset.rate) || 0;
+          if (sRate <= rate) {
+            s.className = 'fa-solid text-gold fa-star cursor-pointer';
+          } else {
+            s.className = 'fa-regular text-slate-600 fa-star cursor-pointer';
+          }
+        });
+      });
+      stars.addEventListener('mouseout', () => {
+        const starIcons = stars.querySelectorAll('i[data-rate]');
+        starIcons.forEach((s) => {
+          s.className = 'fa-regular text-slate-600 fa-star cursor-pointer';
+        });
+      });
+    }
   }
 
   // ======================================================================
@@ -3390,13 +3498,19 @@
             }
           });
         });
+        tempDiv.querySelectorAll('.rec-watched').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            openRateModal(btn.dataset.title || '');
+          });
+        });
         tempDiv.querySelectorAll('.rec-card').forEach((card) => {
           card.addEventListener('click', (e) => {
-            if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-why-wrap')) return;
+            if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-why-wrap')) return;
             openRecommendationDetail(card.dataset.title || '');
           });
           card.addEventListener('keydown', (e) => {
-            if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-why-wrap')) return;
+            if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-why-wrap')) return;
             e.preventDefault();
             openRecommendationDetail(card.dataset.title || '');
           });
@@ -4654,7 +4768,10 @@
     $('#closeRecDetailBtn').addEventListener('click', closeRecommendationDetail);
     $('#recDetailBackdrop').addEventListener('click', closeRecommendationDetail);
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeRecommendationDetail();
+      if (e.key === 'Escape') {
+        closeRecommendationDetail();
+        closeRateModal();
+      }
     });
 
     // Click-away closes the settings menu.
@@ -4735,6 +4852,7 @@
     wireRecommendationNav();
     setupRecommendationFilters();
     wireTrainingFlow();
+    wireRateModal();
 
     // ---- History view toggle ----
     $('#historyBtn').addEventListener('click', () => showView(currentView === 'history' ? 'main' : 'history'));
