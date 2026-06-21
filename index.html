@@ -166,10 +166,15 @@
     .rec-poster { width: 100%; height: 200px; border-radius: 0; }
     .rec-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
       overflow: hidden; }
+    .rec-why-wrap { position: relative; display: inline-flex; max-width: 100%; }
     .rec-why { display: inline-flex; align-items: center; gap: 3px; max-width: 100%;
       font-size: 10px; line-height: 1.2; padding: 2px 6px; border-radius: 9999px;
       background: rgba(124,92,255,.14); color: #b9a7ff; border: 1px solid rgba(124,92,255,.28);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rec-why-pop { position: absolute; left: 0; top: calc(100% + 6px); min-width: 180px;
+      max-width: 260px; z-index: 20; display: none; font-size: 11px; line-height: 1.35;
+      color: #cbd5e1; padding: 8px 10px; white-space: normal; }
+    .rec-why-wrap:hover .rec-why-pop, .rec-why-wrap:focus-within .rec-why-pop, .rec-why-wrap.open .rec-why-pop { display: block; }
     .rec-badge { position: absolute; top: 8px; left: 8px; font-size: 10px; line-height: 1;
       padding: 3px 7px; border-radius: 9999px; background: rgba(124,92,255,.92); color: #fff;
       letter-spacing: .04em; }
@@ -497,7 +502,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 2</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 3</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -2500,7 +2505,12 @@
     const lang = languageBadgeHtml(m);
     const seen = seenIndicatorHtml(m.title);
     const safeTitle = escapeHtml(m.title);
-    const why = rec.why ? `<span class="rec-why" title="${escapeHtml(rec.why)}">${escapeHtml(rec.why)}</span>` : '';
+    const why = rec.why
+      ? `<span class="rec-why-wrap">
+           <span class="rec-why" tabindex="0" aria-label="Why this was recommended">${escapeHtml(rec.why)}</span>
+           <span class="rec-why-pop card">${escapeHtml(rec.why)}</span>
+         </span>`
+      : '';
     return `
       <div class="rec-card" role="listitem" data-title="${safeTitle}" tabindex="0" aria-label="View details for ${safeTitle}">
         <div class="relative">
@@ -2562,6 +2572,17 @@
   function closeRecommendationDetail() {
     const modal = $('#recDetailModal');
     if (modal) modal.classList.add('hidden');
+  }
+
+  function wireRecommendationWhyPopovers(root) {
+    root.querySelectorAll('.rec-why-wrap').forEach((wrap) => {
+      const chip = wrap.querySelector('.rec-why');
+      if (!chip) return;
+      chip.addEventListener('click', (e) => {
+        e.stopPropagation();
+        wrap.classList.toggle('open');
+      });
+    });
   }
 
   function recommendationDataStatus() {
@@ -2642,17 +2663,18 @@
     const canNominate = mine < MAX_NOMINATIONS;
     track.innerHTML = recs.map((rec) => recCardHtml(rec, canNominate)).join('');
     wireSeenIndicator(track);
+    wireRecommendationWhyPopovers(track);
     track.querySelectorAll('.rec-nominate').forEach((btn) => {
       if (btn.disabled) return;
       btn.addEventListener('click', () => dispatch({ type: 'nominate', title: btn.dataset.title }));
     });
     track.querySelectorAll('.rec-card').forEach((card) => {
       card.addEventListener('click', (e) => {
-        if (e.target.closest('.rec-nominate')) return;
+        if (e.target.closest('.rec-nominate') || e.target.closest('.rec-why-wrap')) return;
         openRecommendationDetail(card.dataset.title || '');
       });
       card.addEventListener('keydown', (e) => {
-        if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate')) return;
+        if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-why-wrap')) return;
         e.preventDefault();
         openRecommendationDetail(card.dataset.title || '');
       });
@@ -3739,6 +3761,9 @@
     // Click-away closes the settings menu.
     document.addEventListener('click', (e) => {
       if (!$('#settingsWrap').contains(e.target)) closeSettingsMenu();
+      if (!e.target.closest('.rec-why-wrap')) {
+        document.querySelectorAll('.rec-why-wrap.open').forEach((node) => node.classList.remove('open'));
+      }
     });
 
     // Roll a fresh auto-generated nickname into the name field (same style as
