@@ -553,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 10</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 11</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -2285,6 +2285,7 @@
     // rating; not-interested marks push the parallel dislike vector.
     watchlistStrength: 2.0,
     notInterestedStrength: 1.5,
+    likedDirectorBoost: 0.5,
     // Roughly how many recommendation slots to reserve for watchlist titles so
     // saved movies resurface periodically in the feed.
     watchlistInjectFraction: 0.15,
@@ -2448,10 +2449,16 @@
 
     const watched = loadWatched();
     let rated = 0;
+    const likedDirectors = new Set();
     watched.forEach((wEntry) => {
       const meta = movieMeta(wEntry.title);
       if (!meta) return;
       const r = wEntry.rating || 0;
+      if (r > 3.5) {
+        const dirs = Array.isArray(meta.director) ? meta.director
+                   : (meta.director ? [meta.director] : []);
+        dirs.forEach((d) => likedDirectors.add(d));
+      }
       // Rated: signal proportional to how far from neutral (2.5).
       // Unrated (watched but not scored): mild positive.
       const variance = r ? (r - 2.5) : 0.5;
@@ -2558,7 +2565,8 @@
 
     return { genreWeights, actorWeights, directorWeights, keywordWeights,
              userVector, dislikeVector, positiveSamples,
-             watchedCount: watched.length, ratedCount: rated, hasSignal };
+             watchedCount: watched.length, ratedCount: rated, hasSignal,
+             likedDirectors };
   }
 
   // ---------- candidate scoring ----------
@@ -2592,6 +2600,13 @@
 
     let score = w.genre * gen + w.actor * act + w.director * dir + w.keyword * kw
               + w.quality * qual + w.groupEmbedding * groupCosineScore;
+
+    if (profile.likedDirectors && profile.likedDirectors.size > 0) {
+      const hasLikedDir = dirs.some((d) => profile.likedDirectors.has(d));
+      if (hasLikedDir) {
+        score += REC_CONFIG.likedDirectorBoost;
+      }
+    }
 
     // Negative-context alignment: penalise candidates that look like films the
     // user actively disliked. Subtract half of the (positive) cosine alignment
