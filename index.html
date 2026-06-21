@@ -159,14 +159,22 @@
     .rec-track::-webkit-scrollbar { height: 6px; }
     .rec-track::-webkit-scrollbar-thumb { background: #2a3242; border-radius: 9999px; }
     .rec-card { scroll-snap-align: start; flex: 0 0 150px; width: 150px; background: #141821;
-      border: 1px solid #2a3242; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+      border: 1px solid #2a3242; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column;
+      cursor: pointer; transition: border-color .15s ease, transform .1s ease; }
+    .rec-card:hover, .rec-card:focus-within { border-color: #7c5cff; }
+    .rec-card:active { transform: translateY(1px); }
     .rec-poster { width: 100%; height: 200px; border-radius: 0; }
     .rec-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
       overflow: hidden; }
+    .rec-why-wrap { position: relative; display: inline-flex; max-width: 100%; }
     .rec-why { display: inline-flex; align-items: center; gap: 3px; max-width: 100%;
       font-size: 10px; line-height: 1.2; padding: 2px 6px; border-radius: 9999px;
       background: rgba(124,92,255,.14); color: #b9a7ff; border: 1px solid rgba(124,92,255,.28);
       white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .rec-why-pop { position: absolute; left: 0; top: calc(100% + 6px); min-width: 180px;
+      max-width: 260px; z-index: 20; display: none; font-size: 11px; line-height: 1.35;
+      color: #cbd5e1; padding: 8px 10px; white-space: normal; }
+    .rec-why-wrap:hover .rec-why-pop, .rec-why-wrap:focus-within .rec-why-pop, .rec-why-wrap.open .rec-why-pop { display: block; }
     .rec-badge { position: absolute; top: 8px; left: 8px; font-size: 10px; line-height: 1;
       padding: 3px 7px; border-radius: 9999px; background: rgba(124,92,255,.92); color: #fff;
       letter-spacing: .04em; }
@@ -331,6 +339,9 @@
         <h2 class="font-display text-2xl">RECOMMENDED</h2>
         <div class="flex items-center gap-2">
           <span class="rec-subtitle text-xs text-slate-400">Popular &amp; new</span>
+          <span id="recDataStatus" class="hidden inline-flex items-center" title="" aria-label="Recommendation data status">
+            <span id="recDataStatusDot" class="dot" style="width:8px;height:8px;background:#facc15"></span>
+          </span>
           <button id="recRefreshBtn" type="button" class="btn bg-panel2 border border-line text-xs font-semibold px-2.5 py-1.5 rounded-lg" aria-label="Refresh recommendations">
             <i class="fa-solid fa-rotate-right mr-1"></i>Refresh
           </button>
@@ -491,7 +502,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.8</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 3</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -557,6 +568,20 @@
         <div id="syncReader" class="rounded-xl overflow-hidden"></div>
         <p id="syncReceiveStatus" class="text-xs text-slate-400 h-4"></p>
       </div>
+    </div>
+  </div>
+
+  <!-- ===================== RECOMMENDATION DETAILS MODAL ===================== -->
+  <div id="recDetailModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div id="recDetailBackdrop" class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
+    <div class="card relative z-10 max-w-lg w-full p-5 space-y-4">
+      <div class="flex items-center justify-between gap-3">
+        <h3 id="recDetailTitle" class="font-display text-2xl">MOVIE DETAILS</h3>
+        <button id="closeRecDetailBtn" class="btn w-8 h-8 rounded-lg bg-panel2 border border-line text-slate-300" aria-label="Close">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div id="recDetailBody" class="space-y-3"></div>
     </div>
   </div>
 
@@ -757,6 +782,10 @@
   let MOVIE_DB = [];
   const movieByTitle = new Map();   // normalized title -> db entry
   const movieByKey = new Map();     // looser dbKey -> db entry (punctuation-insensitive)
+  let movieDbStatus = 'idle';       // idle | loading | ready | error
+  let movieDbError = '';
+  let embeddingsStatus = 'idle';    // idle | loading | ready | error
+  let embeddingsError = '';
 
   // Base TMDB poster domain. sync.py stores only the relative path suffix in the
   // binary catalogue (e.g. "/lh4v5.jpg"); we re-prefix it here at load time.
@@ -865,6 +894,8 @@
   }
 
   async function loadMovieDb() {
+    movieDbStatus = 'loading';
+    movieDbError = '';
     try {
       const res = await fetch('movies.pbf', { cache: 'no-cache' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -873,17 +904,25 @@
       if (!Catalog) throw new Error('protobuf decoder unavailable');
       const decoded = Catalog.decode(new Uint8Array(buf));
       MOVIE_DB = (decoded.movies || []).map(inflateMovie);
+      movieDbStatus = 'ready';
     } catch (e) {
       // Recommendations are a progressive enhancement: the app still works for
       // freeform titles if the catalogue can't be fetched/decoded (e.g. file://).
       MOVIE_DB = [];
+      movieDbStatus = 'error';
+      movieDbError = (e && e.message) ? e.message : 'unknown error';
       console.warn('Could not load movies.pbf:', e);
     }
     indexMovieDb();
     if (typeof renderAll === 'function') renderAll();
-    // Lazy-load the (much larger) embeddings binary in the background so the UI
-    // is interactive immediately. Group-taste matching upgrades in once it lands.
-    loadEmbeddings();
+    if (movieDbStatus === 'ready') {
+      // Lazy-load the (much larger) embeddings binary in the background so the UI
+      // is interactive immediately. Group-taste matching upgrades in once it lands.
+      loadEmbeddings();
+    } else {
+      embeddingsStatus = 'idle';
+      embeddingsError = '';
+    }
   }
 
   // Fetch embeddings.bin after the catalogue is on screen and stash the raw bytes
@@ -891,13 +930,25 @@
   // views out of it by v_idx. Failure is non-fatal: the engine simply falls back
   // to neutral similarity scores.
   async function loadEmbeddings() {
+    embeddingsStatus = 'loading';
+    embeddingsError = '';
+    if (typeof renderAll === 'function') renderAll();
     try {
       const res = await fetch('embeddings.bin', { cache: 'no-cache' });
       if (!res.ok) throw new Error('HTTP ' + res.status);
-      window.EMBEDDINGS_BUFFER = await res.arrayBuffer();
+      const buf = await res.arrayBuffer();
+      if (!buf.byteLength || (buf.byteLength % (EMBED_DIM * 4)) !== 0) {
+        throw new Error('invalid embeddings size');
+      }
+      window.EMBEDDINGS_BUFFER = buf;
+      embeddingsStatus = 'ready';
     } catch (e) {
       // Leave EMBEDDINGS_BUFFER undefined so the cosine helper keeps its default.
+      window.EMBEDDINGS_BUFFER = undefined;
+      embeddingsStatus = 'error';
+      embeddingsError = (e && e.message) ? e.message : 'unknown error';
       console.warn('Could not load embeddings.bin:', e);
+      if (typeof renderAll === 'function') renderAll();
       return;
     }
     // Our own taste vector now resolves — recompute, re-share and re-render.
@@ -978,8 +1029,18 @@
     return out;
   }
   const starString = (n) => {
-    const filled = Math.max(0, Math.min(5, Math.round(n || 0)));
-    return '★'.repeat(filled) + '☆'.repeat(5 - filled);
+    const rating = Math.max(0, Math.min(5, Number(n) || 0));
+    const full = Math.floor(rating);
+    const frac = rating - full;
+    const hasHalf = frac >= 0.25 && frac < 0.75;
+    const fullCount = full + (frac >= 0.75 ? 1 : 0);
+    let out = '';
+    for (let i = 1; i <= 5; i++) {
+      if (i <= fullCount) out += '<i class="fa-solid fa-star"></i>';
+      else if (hasHalf && i === full + 1) out += '<i class="fa-solid fa-star-half-stroke"></i>';
+      else out += '<i class="fa-regular fa-star text-slate-500"></i>';
+    }
+    return out;
   };
 
   // 👀 "seen by" indicator markup. Empty string when nobody in the room has
@@ -990,7 +1051,7 @@
     const rows = seers.map((s) => `
       <div class="flex items-center justify-between gap-3 text-xs px-1 py-0.5">
         <span class="truncate">${escapeHtml(s.name)}</span>
-        <span class="text-gold whitespace-nowrap">${s.rating ? escapeHtml(starString(s.rating)) : '<span class=\'text-slate-500\'>unrated</span>'}</span>
+        <span class="text-gold whitespace-nowrap">${s.rating ? starString(s.rating) : '<span class=\'text-slate-500\'>unrated</span>'}</span>
       </div>`).join('');
     return `
       <span class="seen-wrap inline-flex items-center" tabindex="0"
@@ -1683,8 +1744,8 @@
     const everyone = total > 0 && finished === total;
 
     box.textContent = everyone
-      ? `✅ Everyone's ready — all ${total} ${total === 1 ? 'player has' : 'players have'} added their movies.`
-      : `⏳ ${finished} of ${total} ${total === 1 ? 'player' : 'players'} finished adding movies…`;
+      ? `✅ Everyone's ready — all ${total} ${total === 1 ? 'participant has' : 'participants have'} added their movies.`
+      : `⏳ ${finished} of ${total} ${total === 1 ? 'participant' : 'participants'} finished adding movies…`;
     box.classList.toggle('border-emerald-500/50', everyone);
     box.classList.toggle('bg-emerald-500/10', everyone);
     box.classList.toggle('text-emerald-300', everyone);
@@ -2444,9 +2505,14 @@
     const lang = languageBadgeHtml(m);
     const seen = seenIndicatorHtml(m.title);
     const safeTitle = escapeHtml(m.title);
-    const why = rec.why ? `<span class="rec-why" title="${escapeHtml(rec.why)}">${escapeHtml(rec.why)}</span>` : '';
+    const why = rec.why
+      ? `<span class="rec-why-wrap">
+           <span class="rec-why" tabindex="0" aria-label="Why this was recommended">${escapeHtml(rec.why)}</span>
+           <span class="rec-why-pop card">${escapeHtml(rec.why)}</span>
+         </span>`
+      : '';
     return `
-      <div class="rec-card" role="listitem">
+      <div class="rec-card" role="listitem" data-title="${safeTitle}" tabindex="0" aria-label="View details for ${safeTitle}">
         <div class="relative">
           ${posterHtml(m, 'rec-poster')}
           ${rec.isNew ? '<span class="rec-badge">NEW</span>' : ''}
@@ -2454,14 +2520,103 @@
         <div class="p-2 flex flex-col gap-1 flex-1">
           <div class="rec-title text-xs font-medium leading-snug">${safeTitle}${m.year ? ` <span class="text-slate-500">(${escapeHtml(String(m.year))})</span>` : ''}</div>
           ${why}
-          ${seen || lang ? `<div class="flex items-center gap-1 flex-wrap text-[11px]">${seen}${lang}</div>` : ''}
-          ${ratings ? `<div class="text-[10px] text-slate-400 truncate">${ratings}</div>` : ''}
-          <button class="rec-nominate btn mt-auto w-full text-xs font-semibold py-1.5 rounded-lg ${canNominate ? 'btn-primary text-white' : 'opacity-40 cursor-not-allowed'}"
-                  data-title="${safeTitle}" ${canNominate ? '' : 'disabled'}>
-            <i class="fa-solid fa-plus mr-1"></i>Nominate
-          </button>
+          <div class="mt-auto space-y-1">
+            ${seen || lang ? `<div class="flex items-center gap-1 flex-wrap text-[11px]">${seen}${lang}</div>` : ''}
+            ${ratings ? `<div class="text-[10px] text-slate-400 truncate">${ratings}</div>` : ''}
+            <button class="rec-nominate btn w-full text-xs font-semibold py-1.5 rounded-lg ${canNominate ? 'btn-primary text-white' : 'opacity-40 cursor-not-allowed'}"
+                    data-title="${safeTitle}" ${canNominate ? '' : 'disabled'}>
+              <i class="fa-solid fa-plus mr-1"></i>Nominate
+            </button>
+          </div>
         </div>
       </div>`;
+  }
+
+  function openRecommendationDetail(title) {
+    const modal = $('#recDetailModal');
+    const body = $('#recDetailBody');
+    const heading = $('#recDetailTitle');
+    if (!modal || !body || !heading) return;
+    const m = movieMeta(title);
+    if (!m) return;
+    const safeTitle = escapeHtml(m.title || title || 'Movie');
+    const year = m.year ? ` <span class="text-slate-400">(${escapeHtml(String(m.year))})</span>` : '';
+    const genres = genreTagsHtml(m);
+    const lang = languageBadgeHtml(m);
+    const ratings = ratingsLine(m);
+    const description = m.description
+      ? `<p class="text-sm text-slate-300 leading-relaxed">${escapeHtml(m.description)}</p>`
+      : '<p class="text-sm text-slate-500 italic">No description available.</p>';
+    const director = Array.isArray(m.director) && m.director.length
+      ? escapeHtml(m.director.join(', '))
+      : 'Unknown';
+    const cast = Array.isArray(m.cast) && m.cast.length
+      ? escapeHtml(m.cast.slice(0, 8).join(', '))
+      : 'Unknown';
+    heading.innerHTML = `${safeTitle}${year}`;
+    body.innerHTML = `
+      <div class="flex flex-col sm:flex-row gap-4">
+        <div class="shrink-0">${posterHtml(m, 'w-28 h-40 mx-auto sm:mx-0')}</div>
+        <div class="min-w-0 space-y-2">
+          ${genres ? `<div class="flex flex-wrap gap-1">${genres}</div>` : ''}
+          ${lang ? `<div class="text-xs">${lang}</div>` : ''}
+          ${ratings ? `<div class="text-xs text-slate-400">${ratings}</div>` : ''}
+          <div class="text-xs text-slate-400"><span class="uppercase tracking-wider text-slate-500">Director</span><div class="text-slate-300 mt-0.5">${director}</div></div>
+          <div class="text-xs text-slate-400"><span class="uppercase tracking-wider text-slate-500">Cast</span><div class="text-slate-300 mt-0.5">${cast}</div></div>
+        </div>
+      </div>
+      ${description}`;
+    modal.classList.remove('hidden');
+  }
+
+  function closeRecommendationDetail() {
+    const modal = $('#recDetailModal');
+    if (modal) modal.classList.add('hidden');
+  }
+
+  function wireRecommendationWhyPopovers(root) {
+    root.querySelectorAll('.rec-why-wrap').forEach((wrap) => {
+      const chip = wrap.querySelector('.rec-why');
+      if (!chip) return;
+      chip.addEventListener('click', (e) => {
+        e.stopPropagation();
+        wrap.classList.toggle('open');
+      });
+    });
+  }
+
+  function recommendationDataStatus() {
+    if (movieDbStatus === 'error') {
+      return { level: 'error', message: `Recommendations unavailable: couldn't load movies (${movieDbError || 'unknown error'}).` };
+    }
+    if (movieDbStatus === 'loading') {
+      return { level: 'loading', message: 'Loading recommendation movies…' };
+    }
+    if (embeddingsStatus === 'error') {
+      return { level: 'error', message: `Embeddings unavailable: couldn't load recommendation vectors (${embeddingsError || 'unknown error'}).` };
+    }
+    if (embeddingsStatus === 'loading') {
+      return { level: 'loading', message: 'Loading recommendation vectors…' };
+    }
+    return null;
+  }
+
+  function renderRecommendationDataStatus() {
+    const wrap = $('#recDataStatus');
+    const dot = $('#recDataStatusDot');
+    if (!wrap || !dot) return;
+    const status = recommendationDataStatus();
+    wrap.classList.toggle('hidden', !status);
+    if (!status) {
+      wrap.title = '';
+      wrap.setAttribute('aria-label', 'Recommendation data status');
+      dot.classList.remove('pulse');
+      return;
+    }
+    wrap.title = status.message;
+    wrap.setAttribute('aria-label', status.message);
+    dot.style.background = status.level === 'error' ? '#ef4444' : '#facc15';
+    dot.classList.toggle('pulse', status.level === 'loading');
   }
 
   function renderRecommendations(forceRefresh = false) {
@@ -2471,11 +2626,23 @@
     const subtitle = section && section.querySelector('.rec-subtitle');
     if (!section || !track) return;
 
-    // Only relevant while nominating; never show without a catalogue to draw from.
-    if (state.phase !== 'lobby' || !MOVIE_DB.length) { section.classList.add('hidden'); return; }
+    const hasMovieDbError = movieDbStatus === 'error';
+    // Only relevant while nominating. If the catalogue fails to load, keep the
+    // section visible so the status indicator can explain why.
+    if (state.phase !== 'lobby' || (!MOVIE_DB.length && !hasMovieDbError)) { section.classList.add('hidden'); closeRecommendationDetail(); return; }
+    renderRecommendationDataStatus();
+    section.classList.remove('hidden');
+
+    if (hasMovieDbError) {
+      track.innerHTML = '';
+      if (empty) {
+        empty.textContent = 'Recommendations are currently unavailable because movie data failed to load.';
+        empty.classList.remove('hidden');
+      }
+      return;
+    }
 
     const { list: recs, personalised, totalAvailable } = getRecommendations({ forceRefresh });
-    section.classList.remove('hidden');
 
     // Update the subtitle to reflect the recommendation mode.
     if (subtitle) subtitle.textContent = personalised ? 'Picks for you' : 'Popular & new';
@@ -2496,9 +2663,21 @@
     const canNominate = mine < MAX_NOMINATIONS;
     track.innerHTML = recs.map((rec) => recCardHtml(rec, canNominate)).join('');
     wireSeenIndicator(track);
+    wireRecommendationWhyPopovers(track);
     track.querySelectorAll('.rec-nominate').forEach((btn) => {
       if (btn.disabled) return;
       btn.addEventListener('click', () => dispatch({ type: 'nominate', title: btn.dataset.title }));
+    });
+    track.querySelectorAll('.rec-card').forEach((card) => {
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.rec-nominate') || e.target.closest('.rec-why-wrap')) return;
+        openRecommendationDetail(card.dataset.title || '');
+      });
+      card.addEventListener('keydown', (e) => {
+        if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-why-wrap')) return;
+        e.preventDefault();
+        openRecommendationDetail(card.dataset.title || '');
+      });
     });
   }
 
@@ -3573,10 +3752,18 @@
     $('#syncBackdrop').addEventListener('click', closeSyncModal);
     $('#syncShareBtn').addEventListener('click', startSyncShare);
     $('#syncReceiveBtn').addEventListener('click', startSyncReceiveScan);
+    $('#closeRecDetailBtn').addEventListener('click', closeRecommendationDetail);
+    $('#recDetailBackdrop').addEventListener('click', closeRecommendationDetail);
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') closeRecommendationDetail();
+    });
 
     // Click-away closes the settings menu.
     document.addEventListener('click', (e) => {
       if (!$('#settingsWrap').contains(e.target)) closeSettingsMenu();
+      if (!e.target.closest('.rec-why-wrap')) {
+        document.querySelectorAll('.rec-why-wrap.open').forEach((node) => node.classList.remove('open'));
+      }
     });
 
     // Roll a fresh auto-generated nickname into the name field (same style as
