@@ -553,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 11</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 12</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -4768,7 +4768,10 @@
     $('#closeRecDetailBtn').addEventListener('click', closeRecommendationDetail);
     $('#recDetailBackdrop').addEventListener('click', closeRecommendationDetail);
     document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape') closeRecommendationDetail();
+      if (e.key === 'Escape') {
+        closeRecommendationDetail();
+        closeRateModal();
+      }
     });
 
     // Click-away closes the settings menu.
@@ -4849,6 +4852,7 @@
     wireRecommendationNav();
     setupRecommendationFilters();
     wireTrainingFlow();
+    wireRateModal();
 
     // ---- History view toggle ----
     $('#historyBtn').addEventListener('click', () => showView(currentView === 'history' ? 'main' : 'history'));
