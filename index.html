@@ -1,0 +1,1048 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <title>🎬 Movie Night — P2P Ranked-Choice Voting</title>
+
+  <!-- ===== External dependencies (all via CDN, no build step) ===== -->
+  <!-- Tailwind CSS for fast, clean, responsive styling -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- PeerJS: WebRTC wrapper used for the P2P data mesh -->
+  <script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+  <!-- qrcode.js: generates the room-join QR code (host only) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- html5-qrcode: in-app camera QR scanner (fallback join method) -->
+  <script src="https://unpkg.com/html5-qrcode"></script>
+
+  <script>
+    // Configure Tailwind theme tokens for our cinematic dark palette.
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            ink: '#0b0d12',
+            panel: '#141821',
+            panel2: '#1c212d',
+            line: '#2a3242',
+            accent: '#ff3d6e',
+            accent2: '#7c5cff',
+            gold: '#ffce4d',
+          },
+          fontFamily: {
+            display: ['"Bebas Neue"', 'system-ui', 'sans-serif'],
+          },
+        },
+      },
+    };
+  </script>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    :root { color-scheme: dark; }
+    html, body { height: 100%; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background:
+        radial-gradient(1200px 600px at 20% -10%, rgba(124,92,255,.18), transparent 60%),
+        radial-gradient(1000px 500px at 100% 0%, rgba(255,61,110,.16), transparent 55%),
+        #0b0d12;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .font-display { font-family: 'Bebas Neue', system-ui, sans-serif; letter-spacing: .03em; }
+
+    /* Soft card surface */
+    .card {
+      background: linear-gradient(180deg, rgba(28,33,45,.9), rgba(20,24,33,.9));
+      border: 1px solid #2a3242;
+      border-radius: 1rem;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+    }
+
+    /* Pulsing status dot */
+    .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .dot.pulse { animation: pulse 1.4s infinite; }
+    @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(124,92,255,.55)} 70%{box-shadow:0 0 0 8px rgba(124,92,255,0)} 100%{box-shadow:0 0 0 0 rgba(124,92,255,0)} }
+
+    /* Draggable rank rows */
+    .rank-row { transition: transform .12s ease, box-shadow .12s ease, opacity .12s ease; }
+    .rank-row.dragging { opacity: .6; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
+    .rank-row.drag-over { transform: translateY(2px); border-color: #7c5cff; }
+
+    /* Winner celebration */
+    @keyframes popIn { 0%{transform:scale(.8);opacity:0} 60%{transform:scale(1.04)} 100%{transform:scale(1);opacity:1} }
+    .pop-in { animation: popIn .5s cubic-bezier(.2,.8,.2,1) both; }
+
+    /* Confetti pieces */
+    .confetti { position: fixed; top: -12px; width: 9px; height: 14px; opacity: .9; z-index: 50; will-change: transform; }
+    @keyframes fall { to { transform: translateY(110vh) rotate(720deg); } }
+
+    .btn { transition: transform .08s ease, filter .15s ease, background .15s ease; }
+    .btn:active { transform: translateY(1px) scale(.99); }
+    .btn-primary { background: linear-gradient(180deg,#ff5a83,#ff3d6e); }
+    .btn-primary:hover { filter: brightness(1.05); }
+    .btn-accent2 { background: linear-gradient(180deg,#8b6dff,#7c5cff); }
+
+    /* Hide number input spinners */
+    input[type=number]::-webkit-outer-spin-button,
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+  </style>
+</head>
+
+<body class="text-slate-200 min-h-full">
+  <!-- ============================ HEADER ============================ -->
+  <header class="sticky top-0 z-30 backdrop-blur bg-ink/70 border-b border-line">
+    <div class="max-w-3xl mx-auto px-4 py-3 flex items-center gap-3">
+      <div class="text-2xl">🎬</div>
+      <div class="flex-1">
+        <h1 class="font-display text-2xl leading-none">MOVIE NIGHT</h1>
+        <p class="text-[11px] text-slate-400 -mt-0.5">P2P Ranked-Choice Voting</p>
+      </div>
+      <!-- Live network status indicator -->
+      <div id="netStatus" class="flex items-center gap-2 text-xs px-3 py-1.5 rounded-full bg-panel2 border border-line">
+        <span id="netDot" class="dot pulse" style="background:#ffce4d"></span>
+        <span id="netText" class="font-medium">Booting…</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-3xl mx-auto px-4 py-5 pb-24 space-y-5">
+
+    <!-- ===================== ROOM / CONNECTION BAR ===================== -->
+    <section class="card p-4">
+      <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div class="text-[11px] uppercase tracking-wider text-slate-400">Room</div>
+          <div id="roomIdLabel" class="font-display text-3xl">------</div>
+        </div>
+        <div class="flex items-center gap-2">
+          <div class="text-right">
+            <div class="text-[11px] uppercase tracking-wider text-slate-400">You are</div>
+            <div id="youLabel" class="font-semibold">…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Host-only sharing block (QR + copy link). Hidden for guests. -->
+      <div id="shareBlock" class="hidden mt-4 grid sm:grid-cols-[auto,1fr] gap-4 items-center">
+        <div class="bg-white p-2 rounded-xl mx-auto sm:mx-0">
+          <div id="qrcode"></div>
+        </div>
+        <div class="space-y-2">
+          <p class="text-sm text-slate-300">Scan to join on the same Wi‑Fi, or share the link:</p>
+          <div class="flex gap-2">
+            <input id="shareLink" readonly class="flex-1 min-w-0 bg-ink border border-line rounded-lg px-3 py-2 text-xs" />
+            <button id="copyLinkBtn" class="btn btn-accent2 text-white text-sm font-semibold px-3 py-2 rounded-lg">Copy</button>
+          </div>
+          <p id="copyMsg" class="text-xs text-emerald-400 h-4"></p>
+        </div>
+      </div>
+
+      <!-- Guest-side in-app scanner fallback (for the very first join). -->
+      <div id="scanBlock" class="hidden mt-4">
+        <button id="openScanBtn" class="btn btn-accent2 text-white text-sm font-semibold px-3 py-2 rounded-lg w-full">📷 Scan a room QR code</button>
+        <div id="scannerWrap" class="hidden mt-3">
+          <div id="reader" class="rounded-xl overflow-hidden"></div>
+          <button id="closeScanBtn" class="btn mt-2 text-sm px-3 py-2 rounded-lg bg-panel2 border border-line w-full">Cancel</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== LOBBY (PEERS) ===================== -->
+    <section class="card p-4">
+      <div class="flex items-center justify-between mb-3">
+        <h2 class="font-display text-2xl">LOBBY</h2>
+        <span id="peerCount" class="text-xs text-slate-400">0/6</span>
+      </div>
+      <div id="peerGrid" class="grid grid-cols-2 sm:grid-cols-3 gap-2"></div>
+    </section>
+
+    <!-- ===================== PHASE 1: NOMINATIONS ===================== -->
+    <section id="phaseNominate" class="card p-4 space-y-4">
+      <div class="flex items-center justify-between">
+        <h2 class="font-display text-2xl">NOMINATE</h2>
+        <span class="text-xs text-slate-400">Pick up to 2 movies</span>
+      </div>
+
+      <form id="nominateForm" class="flex gap-2">
+        <input id="movieInput" maxlength="80" placeholder="Add a movie title…"
+               class="flex-1 min-w-0 bg-ink border border-line rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:border-accent2" />
+        <button id="addMovieBtn" type="submit" class="btn btn-primary text-white font-semibold px-4 py-2.5 rounded-lg">Add</button>
+      </form>
+      <p id="nominateMsg" class="text-xs text-slate-400 -mt-2"></p>
+
+      <div>
+        <div class="text-[11px] uppercase tracking-wider text-slate-400 mb-2">Nominated Movies</div>
+        <ul id="movieList" class="space-y-2"></ul>
+        <p id="emptyMovies" class="text-sm text-slate-500 italic">No movies yet — be the first to nominate!</p>
+      </div>
+
+      <!-- Host-only control to advance the whole room to voting. -->
+      <button id="lockBtn" class="hidden btn btn-accent2 text-white font-semibold w-full py-3 rounded-xl">
+        🔒 Lock Nominations & Start Voting
+      </button>
+      <p id="lockHint" class="hidden text-center text-xs text-slate-500">Waiting for the host to start voting…</p>
+    </section>
+
+    <!-- ===================== PHASE 2: VOTING ===================== -->
+    <section id="phaseVote" class="hidden card p-4 space-y-4">
+      <h2 class="font-display text-2xl">RANK YOUR CHOICES</h2>
+      <p class="text-sm text-slate-400">Drag to reorder, or use the arrows. #1 is your favourite.</p>
+      <ul id="ballot" class="space-y-2"></ul>
+      <button id="submitVoteBtn" class="btn btn-primary text-white font-semibold w-full py-3 rounded-xl">Submit Vote</button>
+      <p id="voteMsg" class="text-center text-sm text-emerald-400 h-5"></p>
+      <div class="text-xs text-slate-400 text-center"><span id="voteProgress">0</span> votes received</div>
+      <!-- Host can force-close voting before everyone has voted. -->
+      <button id="closeVoteBtn" class="hidden btn btn-accent2 text-white font-semibold w-full py-2.5 rounded-lg">Close Voting & Show Results</button>
+    </section>
+
+    <!-- ===================== PHASE 3: RESULTS ===================== -->
+    <section id="phaseResults" class="hidden card p-4 space-y-4">
+      <h2 class="font-display text-2xl text-center">🏆 AND THE WINNER IS 🏆</h2>
+      <div id="winnerCard" class="pop-in text-center bg-gradient-to-b from-panel2 to-ink border border-gold/40 rounded-2xl p-6">
+        <div id="winnerTitle" class="font-display text-4xl text-gold">—</div>
+        <div id="winnerSub" class="text-sm text-slate-400 mt-1"></div>
+      </div>
+
+      <div>
+        <div class="text-[11px] uppercase tracking-wider text-slate-400 mb-2">Instant-Runoff Rounds</div>
+        <div id="rounds" class="space-y-3"></div>
+      </div>
+
+      <button id="restartBtn" class="hidden btn btn-accent2 text-white font-semibold w-full py-3 rounded-xl">🔁 New Round (Host)</button>
+    </section>
+  </main>
+
+  <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
+    Serverless P2P over WebRTC · No data leaves your devices except signaling.
+  </footer>
+
+  <script>
+  /* ======================================================================
+   *  MOVIE NIGHT — single-file P2P ranked-choice voting app
+   *
+   *  Network model
+   *  -------------
+   *  - HOST  (no ?room= in URL): generates a Room ID, owns the AUTHORITATIVE
+   *    state object, and broadcasts it to everyone. PeerJS id is deterministic
+   *    so guests can reach it: `room-<ROOM>-host`.
+   *  - GUEST (?room=<ROOM> in URL): random PeerJS id, connects to the host,
+   *    then connects to every other guest the host advertises -> FULL MESH.
+   *
+   *  All gameplay actions (nominate / start / vote / close / reset) are sent
+   *  to the HOST. The host mutates the single source-of-truth state and
+   *  re-broadcasts the whole state to all peers. Everyone renders from state.
+   *  Mesh links exist for resilience/low-latency relays and satisfy the
+   *  full-mesh requirement; the host remains the coordinator.
+   * ==================================================================== */
+
+  'use strict';
+
+  // ----------------------------- Constants ------------------------------
+  const MAX_PEERS = 6;          // including host
+  const MAX_NOMINATIONS = 2;    // movies per person
+  const ROOM_ID_LEN = 6;
+
+  // ------------------------- Small DOM helpers --------------------------
+  const $ = (sel) => document.querySelector(sel);
+  const el = (tag, cls) => { const n = document.createElement(tag); if (cls) n.className = cls; return n; };
+  const escapeHtml = (s) => String(s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  // ----------------------------- App globals ----------------------------
+  let peer = null;                 // PeerJS instance
+  let isHost = false;
+  let roomId = null;
+  let myId = null;                 // my PeerJS id
+  let myName = '…';                // assigned display name (e.g. "Host", "Peer 2")
+  const connections = new Map();   // peerId -> DataConnection (open)
+  let hasVotedLocally = false;     // guard so we don't re-render our ballot away
+
+  /* The authoritative state. On the host this is the real thing; on guests
+   * it is the latest snapshot received from the host. */
+  let state = {
+    phase: 'lobby',              // 'lobby' | 'voting' | 'results'
+    peers: [],                   // [{ id, name }] — ordered; index 0 is host
+    movies: [],                  // [{ id, title, by }]
+    votes: {},                   // peerId -> [movieId, movieId, ...] ranked
+    results: null,               // computed instant-runoff result (set in results phase)
+  };
+
+  // ======================================================================
+  //  BOOTSTRAP — decide host vs guest from the URL
+  // ======================================================================
+  function boot() {
+    const params = new URLSearchParams(location.search);
+    const urlRoom = params.get('room');
+
+    if (urlRoom) {
+      isHost = false;
+      roomId = urlRoom.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, ROOM_ID_LEN);
+      startGuest();
+    } else {
+      isHost = true;
+      roomId = randomRoomId();
+      // Smoothly reflect the room in the URL without reloading.
+      const url = `${location.pathname}?room=${roomId}`;
+      history.pushState({ room: roomId }, '', url);
+      startHost();
+    }
+
+    $('#roomIdLabel').textContent = roomId;
+    wireUiEvents();
+  }
+
+  function randomRoomId() {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // no ambiguous chars
+    let s = '';
+    for (let i = 0; i < ROOM_ID_LEN; i++) s += alphabet[Math.floor(Math.random() * alphabet.length)];
+    return s;
+  }
+
+  // ======================================================================
+  //  HOST SETUP
+  // ======================================================================
+  function startHost() {
+    setStatus('warn', 'Starting host…');
+    peer = new Peer(`room-${roomId}-host`, { debug: 1 });
+
+    peer.on('open', (id) => {
+      myId = id;
+      // Seed the authoritative peer list with ourselves as "Host".
+      state.peers = [{ id, name: 'Host' }];
+      myName = 'Host';
+      $('#youLabel').textContent = myName;
+      setStatus('ok', `Hosting · 1/${MAX_PEERS}`);
+      renderShareBlock();
+      renderAll();
+    });
+
+    // A guest connected to us.
+    peer.on('connection', (conn) => setupConnection(conn));
+
+    peer.on('error', (err) => handlePeerError(err));
+    peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
+  }
+
+  // ======================================================================
+  //  GUEST SETUP
+  // ======================================================================
+  function startGuest() {
+    setStatus('warn', 'Connecting…');
+    myName = 'Connecting…';
+    $('#youLabel').textContent = myName;
+
+    peer = new Peer(`peer-${Math.random().toString(36).slice(2, 10)}`, { debug: 1 });
+
+    peer.on('open', (id) => {
+      myId = id;
+      connectToHost();
+    });
+
+    // Another guest is dialing us (mesh formation).
+    peer.on('connection', (conn) => setupConnection(conn));
+
+    peer.on('error', (err) => handlePeerError(err));
+    peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) {} });
+
+    // Show the in-app scanner fallback for guests.
+    $('#scanBlock').classList.remove('hidden');
+  }
+
+  function connectToHost() {
+    const hostId = `room-${roomId}-host`;
+    const conn = peer.connect(hostId, { reliable: true, metadata: { role: 'guest' } });
+    setupConnection(conn, () => {
+      // Introduce ourselves once the channel is open.
+      safeSend(conn, { type: 'join' });
+    });
+  }
+
+  // ======================================================================
+  //  CONNECTION PLUMBING (shared by host + guest, with dup guards)
+  // ======================================================================
+  function setupConnection(conn, onOpen) {
+    // Duplicate-connection guard: if a channel to this peer is already open,
+    // keep the existing one and let this one close.
+    conn.on('open', () => {
+      if (connections.has(conn.peer) && connections.get(conn.peer) !== conn) {
+        // Already connected — drop the redundant link.
+        try { conn.close(); } catch (e) {}
+        return;
+      }
+      connections.set(conn.peer, conn);
+      updateNetCount();
+      if (typeof onOpen === 'function') onOpen();
+    });
+
+    conn.on('data', (msg) => handleMessage(conn, msg));
+
+    conn.on('close', () => {
+      if (connections.get(conn.peer) === conn) connections.delete(conn.peer);
+      if (isHost) removePeer(conn.peer);
+      updateNetCount();
+    });
+
+    conn.on('error', () => { /* surfaced via peer 'error' too */ });
+  }
+
+  // Safe JSON send that ignores closed channels.
+  function safeSend(conn, obj) {
+    try { if (conn && conn.open) conn.send(obj); } catch (e) {}
+  }
+
+  // Broadcast to every open connection (optionally excluding one peer id).
+  function broadcast(obj, exceptId) {
+    connections.forEach((conn, id) => { if (id !== exceptId) safeSend(conn, obj); });
+  }
+
+  // ======================================================================
+  //  MESSAGE ROUTING
+  // ======================================================================
+  function handleMessage(conn, msg) {
+    if (!msg || typeof msg !== 'object') return;
+
+    switch (msg.type) {
+      // ----- Guest -> Host: a new peer announces itself -----
+      case 'join':
+        if (!isHost) return;
+        hostAddPeer(conn.peer);
+        break;
+
+      // ----- Host -> All: roster of every peer id so guests can mesh -----
+      case 'directory':
+        if (isHost) return;
+        meshConnect(msg.peers);
+        break;
+
+      // ----- Host -> All: full authoritative state snapshot -----
+      case 'state':
+        if (isHost) return;
+        applyRemoteState(msg.state);
+        break;
+
+      // ----- Mesh hello (guest <-> guest), informational -----
+      case 'hello':
+        break;
+
+      // ----- Any -> Host: a gameplay action -----
+      case 'action':
+        if (!isHost) return;
+        applyAction(msg.action, conn.peer);
+        break;
+    }
+  }
+
+  // ======================================================================
+  //  HOST: roster management
+  // ======================================================================
+  function hostAddPeer(peerId) {
+    if (state.peers.find((p) => p.id === peerId)) return; // dup guard
+
+    if (state.peers.length >= MAX_PEERS) {
+      // Room full — politely close.
+      const conn = connections.get(peerId);
+      if (conn) safeSend(conn, { type: 'state', state: { ...state, full: true } });
+      try { conn && conn.close(); } catch (e) {}
+      return;
+    }
+
+    const name = `Peer ${state.peers.length + 1}`;
+    state.peers.push({ id: peerId, name });
+
+    broadcastDirectory();
+    broadcastState();
+    renderAll();
+    updateNetCount();
+  }
+
+  function removePeer(peerId) {
+    const before = state.peers.length;
+    state.peers = state.peers.filter((p) => p.id !== peerId);
+    delete state.votes[peerId];
+    if (state.peers.length !== before) {
+      broadcastDirectory();
+      // If we were waiting on this peer's vote, results may now be ready.
+      maybeAutoFinish();
+      broadcastState();
+      renderAll();
+    }
+  }
+
+  // Tell all guests the full id roster so they can build the mesh.
+  function broadcastDirectory() {
+    const ids = state.peers.map((p) => p.id);
+    broadcast({ type: 'directory', peers: ids });
+  }
+
+  function broadcastState() {
+    broadcast({ type: 'state', state });
+  }
+
+  // ======================================================================
+  //  GUEST: mesh building + state ingestion
+  // ======================================================================
+  function meshConnect(peerIds) {
+    peerIds.forEach((id) => {
+      if (id === myId) return;                        // not myself
+      if (id === `room-${roomId}-host`) return;       // already linked to host
+      if (connections.has(id)) return;                // dup guard
+      // Deterministic dialer to avoid both sides dialing simultaneously:
+      // only the lexicographically-smaller id initiates.
+      if (myId < id) {
+        const conn = peer.connect(id, { reliable: true, metadata: { role: 'mesh' } });
+        setupConnection(conn, () => safeSend(conn, { type: 'hello' }));
+      }
+    });
+  }
+
+  function applyRemoteState(remote) {
+    if (!remote) return;
+    if (remote.full) {
+      setStatus('err', 'Room is full (6/6)');
+      return;
+    }
+    const prevPhase = state.phase;
+    state = remote;
+
+    // Figure out my display name + my "you are" label.
+    const me = state.peers.find((p) => p.id === myId);
+    myName = me ? me.name : 'Connecting…';
+    $('#youLabel').textContent = myName;
+
+    // Reset local vote guard when we (re)enter voting.
+    if (prevPhase !== 'voting' && state.phase === 'voting') hasVotedLocally = false;
+
+    setStatus('ok', `Connected · ${state.peers.length}/${MAX_PEERS}`);
+    renderAll();
+  }
+
+  // ======================================================================
+  //  ACTIONS — guests dispatch to host; host applies locally
+  // ======================================================================
+  function dispatch(action) {
+    if (isHost) {
+      applyAction(action, myId);
+    } else {
+      const hostConn = connections.get(`room-${roomId}-host`);
+      safeSend(hostConn, { type: 'action', action });
+    }
+  }
+
+  // Host-side reducer for all gameplay actions.
+  function applyAction(action, fromId) {
+    if (!isHost || !action) return;
+
+    switch (action.type) {
+      case 'nominate': {
+        if (state.phase !== 'lobby') return;
+        const mine = state.movies.filter((m) => m.by === fromId).length;
+        if (mine >= MAX_NOMINATIONS) return;          // enforce 2-per-person
+        const title = String(action.title || '').trim().slice(0, 80);
+        if (!title) return;
+        // Case-insensitive duplicate guard across the whole room.
+        if (state.movies.some((m) => m.title.toLowerCase() === title.toLowerCase())) return;
+        state.movies.push({ id: 'm_' + Math.random().toString(36).slice(2, 9), title, by: fromId });
+        break;
+      }
+
+      case 'startVoting': {
+        if (fromId !== myId) return;                  // host-only
+        if (state.phase !== 'lobby') return;
+        if (state.movies.length < 2) return;          // need ≥2 options
+        state.phase = 'voting';
+        state.votes = {};
+        break;
+      }
+
+      case 'vote': {
+        if (state.phase !== 'voting') return;
+        const valid = Array.isArray(action.ranking) ? action.ranking
+          .filter((id) => state.movies.some((m) => m.id === id)) : [];
+        // De-dup while preserving order.
+        state.votes[fromId] = [...new Set(valid)];
+        maybeAutoFinish();
+        break;
+      }
+
+      case 'closeVoting': {
+        if (fromId !== myId) return;                  // host-only
+        if (state.phase !== 'voting') return;
+        finishVoting();
+        return;                                        // finishVoting broadcasts
+      }
+
+      case 'reset': {
+        if (fromId !== myId) return;                  // host-only
+        state.phase = 'lobby';
+        state.movies = [];
+        state.votes = {};
+        state.results = null;
+        break;
+      }
+    }
+
+    broadcastState();
+    renderAll();
+  }
+
+  // Auto-advance to results once every connected peer has voted.
+  function maybeAutoFinish() {
+    if (state.phase !== 'voting') return;
+    const voters = Object.keys(state.votes).length;
+    if (voters >= state.peers.length && state.peers.length > 0) finishVoting();
+  }
+
+  function finishVoting() {
+    state.results = instantRunoff(state.votes, state.movies);
+    state.phase = 'results';
+    broadcastState();
+    renderAll();
+  }
+
+  // ======================================================================
+  //  RANKED-CHOICE (INSTANT-RUNOFF) ALGORITHM
+  // ======================================================================
+  /**
+   * @param {Object} votes  peerId -> [movieId ranked best→worst]
+   * @param {Array}  movies [{ id, title }]
+   * @returns {{ winnerId, winnerTitle, rounds: [...], totalBallots }}
+   */
+  function instantRunoff(votes, movies) {
+    const titleOf = (id) => (movies.find((m) => m.id === id) || {}).title || '—';
+    const ballots = Object.values(votes).filter((b) => Array.isArray(b) && b.length);
+    const totalBallots = ballots.length;
+
+    let remaining = new Set(movies.map((m) => m.id));
+    const rounds = [];
+    let winnerId = null;
+
+    if (totalBallots === 0) {
+      return { winnerId: null, winnerTitle: null, rounds: [], totalBallots: 0 };
+    }
+
+    // Safety bound: at most one elimination per candidate.
+    for (let guard = 0; guard < movies.length + 1 && remaining.size > 0; guard++) {
+      // Tally each ballot's top choice that is still in the running.
+      const tally = {};
+      remaining.forEach((id) => (tally[id] = 0));
+      let counted = 0;
+      ballots.forEach((b) => {
+        const pick = b.find((id) => remaining.has(id));
+        if (pick !== undefined) { tally[pick]++; counted++; }
+      });
+
+      const entries = Object.entries(tally).sort((a, b) => b[1] - a[1]);
+      const majority = counted / 2;
+
+      const roundInfo = {
+        tally: entries.map(([id, n]) => ({ id, title: titleOf(id), votes: n })),
+        counted,
+        eliminated: null,
+        winner: null,
+      };
+
+      // Win condition: strictly more than 50% of counted ballots.
+      const [topId, topVotes] = entries[0] || [null, 0];
+      if (topId && (topVotes > majority || remaining.size === 1)) {
+        winnerId = topId;
+        roundInfo.winner = { id: topId, title: titleOf(topId), votes: topVotes };
+        rounds.push(roundInfo);
+        break;
+      }
+
+      // Otherwise eliminate the lowest scorer(s). Handle ties by removing all
+      // tied-lowest candidates only if that doesn't wipe everyone.
+      const lowest = entries[entries.length - 1][1];
+      let losers = entries.filter(([, n]) => n === lowest).map(([id]) => id);
+      if (losers.length === remaining.size) {
+        // Perfect tie among all remaining → break by first-preference order.
+        losers = [entries[entries.length - 1][0]];
+      }
+      losers.forEach((id) => remaining.delete(id));
+      roundInfo.eliminated = losers.map((id) => ({ id, title: titleOf(id) }));
+      rounds.push(roundInfo);
+    }
+
+    return {
+      winnerId,
+      winnerTitle: winnerId ? titleOf(winnerId) : null,
+      rounds,
+      totalBallots,
+    };
+  }
+
+  // ======================================================================
+  //  RENDERING
+  // ======================================================================
+  function renderAll() {
+    renderPeers();
+    renderPhase();
+    renderMovies();
+    renderBallotIfNeeded();
+    renderVoteProgress();
+    renderResults();
+  }
+
+  function renderPeers() {
+    const grid = $('#peerGrid');
+    grid.innerHTML = '';
+    state.peers.forEach((p, i) => {
+      const card = el('div', 'bg-panel2 border border-line rounded-lg px-3 py-2 flex items-center gap-2');
+      const isMe = p.id === myId;
+      card.innerHTML = `
+        <span class="dot" style="background:${i === 0 ? '#ffce4d' : '#7c5cff'}"></span>
+        <span class="text-sm font-medium truncate">${escapeHtml(p.name)}</span>
+        ${isMe ? '<span class="ml-auto text-[10px] text-slate-400">you</span>' : ''}`;
+      grid.appendChild(card);
+    });
+    $('#peerCount').textContent = `${state.peers.length}/${MAX_PEERS}`;
+  }
+
+  function renderPhase() {
+    $('#phaseNominate').classList.toggle('hidden', state.phase !== 'lobby');
+    $('#phaseVote').classList.toggle('hidden', state.phase !== 'voting');
+    $('#phaseResults').classList.toggle('hidden', state.phase !== 'results');
+
+    // Host-only controls visibility.
+    $('#lockBtn').classList.toggle('hidden', !(isHost && state.phase === 'lobby'));
+    $('#lockHint').classList.toggle('hidden', isHost || state.phase !== 'lobby');
+    $('#closeVoteBtn').classList.toggle('hidden', !(isHost && state.phase === 'voting'));
+    $('#restartBtn').classList.toggle('hidden', !(isHost && state.phase === 'results'));
+
+    // Enable the lock button only when enough movies exist.
+    const lockBtn = $('#lockBtn');
+    if (isHost) {
+      const ready = state.movies.length >= 2;
+      lockBtn.disabled = !ready;
+      lockBtn.classList.toggle('opacity-40', !ready);
+      lockBtn.classList.toggle('cursor-not-allowed', !ready);
+    }
+  }
+
+  function renderMovies() {
+    const list = $('#movieList');
+    list.innerHTML = '';
+    $('#emptyMovies').classList.toggle('hidden', state.movies.length > 0);
+
+    state.movies.forEach((m, i) => {
+      const li = el('li', 'flex items-center gap-3 bg-panel2 border border-line rounded-lg px-3 py-2');
+      const who = (state.peers.find((p) => p.id === m.by) || {}).name || 'Someone';
+      li.innerHTML = `
+        <span class="font-display text-xl text-slate-500 w-6 text-center">${i + 1}</span>
+        <span class="flex-1 text-sm font-medium truncate">${escapeHtml(m.title)}</span>
+        <span class="text-[10px] text-slate-500">by ${escapeHtml(who)}</span>`;
+      list.appendChild(li);
+    });
+
+    // Update the per-user nomination hint.
+    const mine = state.movies.filter((m) => m.by === myId).length;
+    const left = MAX_NOMINATIONS - mine;
+    const input = $('#movieInput');
+    const btn = $('#addMovieBtn');
+    const disabled = left <= 0 || state.phase !== 'lobby';
+    input.disabled = disabled;
+    btn.disabled = disabled;
+    btn.classList.toggle('opacity-40', disabled);
+    $('#nominateMsg').textContent = left > 0
+      ? `You can add ${left} more movie${left === 1 ? '' : 's'}.`
+      : 'You have used both of your nominations.';
+  }
+
+  // ---- Phase 2: drag-and-drop / arrow ranking ballot ----
+  let ballotOrder = [];   // local working copy of movie ids in my ranked order
+
+  function renderBallotIfNeeded() {
+    if (state.phase !== 'voting') return;
+    const ul = $('#ballot');
+
+    // Initialise / refresh the ballot order to include all current movies.
+    const movieIds = state.movies.map((m) => m.id);
+    if (!ballotOrder.length || ballotOrder.length !== movieIds.length ||
+        !ballotOrder.every((id) => movieIds.includes(id))) {
+      ballotOrder = movieIds.slice();
+    }
+
+    // If we already submitted, lock the UI.
+    const submitBtn = $('#submitVoteBtn');
+    submitBtn.disabled = hasVotedLocally;
+    submitBtn.classList.toggle('opacity-40', hasVotedLocally);
+    $('#voteMsg').textContent = hasVotedLocally ? '✅ Vote submitted! Waiting for others…' : '';
+
+    ul.innerHTML = '';
+    ballotOrder.forEach((id, idx) => {
+      const movie = state.movies.find((m) => m.id === id);
+      if (!movie) return;
+      const li = el('li', 'rank-row flex items-center gap-3 bg-panel2 border border-line rounded-lg px-3 py-2.5');
+      li.draggable = !hasVotedLocally;
+      li.dataset.id = id;
+      li.innerHTML = `
+        <span class="font-display text-2xl text-accent2 w-7 text-center">${idx + 1}</span>
+        <span class="flex-1 text-sm font-medium truncate">${escapeHtml(movie.title)}</span>
+        <span class="flex flex-col gap-1">
+          <button data-dir="up" class="up btn w-7 h-7 rounded bg-ink border border-line text-xs leading-none">▲</button>
+          <button data-dir="down" class="down btn w-7 h-7 rounded bg-ink border border-line text-xs leading-none">▼</button>
+        </span>`;
+
+      if (!hasVotedLocally) {
+        // Arrow controls.
+        li.querySelector('.up').onclick = () => moveBallot(idx, -1);
+        li.querySelector('.down').onclick = () => moveBallot(idx, 1);
+        // Drag-and-drop.
+        li.addEventListener('dragstart', (e) => { li.classList.add('dragging'); e.dataTransfer.setData('text/plain', id); });
+        li.addEventListener('dragend', () => li.classList.remove('dragging'));
+        li.addEventListener('dragover', (e) => { e.preventDefault(); li.classList.add('drag-over'); });
+        li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
+        li.addEventListener('drop', (e) => {
+          e.preventDefault();
+          li.classList.remove('drag-over');
+          const draggedId = e.dataTransfer.getData('text/plain');
+          reorderBallot(draggedId, id);
+        });
+      }
+      ul.appendChild(li);
+    });
+  }
+
+  function moveBallot(idx, delta) {
+    const j = idx + delta;
+    if (j < 0 || j >= ballotOrder.length) return;
+    [ballotOrder[idx], ballotOrder[j]] = [ballotOrder[j], ballotOrder[idx]];
+    renderBallotIfNeeded();
+  }
+
+  function reorderBallot(draggedId, targetId) {
+    if (draggedId === targetId) return;
+    const from = ballotOrder.indexOf(draggedId);
+    const to = ballotOrder.indexOf(targetId);
+    if (from < 0 || to < 0) return;
+    ballotOrder.splice(from, 1);
+    ballotOrder.splice(to, 0, draggedId);
+    renderBallotIfNeeded();
+  }
+
+  function renderVoteProgress() {
+    if (state.phase !== 'voting') return;
+    $('#voteProgress').textContent = `${Object.keys(state.votes).length}/${state.peers.length}`;
+  }
+
+  function renderResults() {
+    if (state.phase !== 'results' || !state.results) return;
+    const r = state.results;
+
+    $('#winnerTitle').textContent = r.winnerTitle || 'No votes cast';
+    $('#winnerSub').textContent = r.winnerTitle
+      ? `Won across ${r.rounds.length} round${r.rounds.length === 1 ? '' : 's'} · ${r.totalBallots} ballot${r.totalBallots === 1 ? '' : 's'}`
+      : 'Nobody submitted a ranking.';
+
+    const wrap = $('#rounds');
+    wrap.innerHTML = '';
+    r.rounds.forEach((round, i) => {
+      const box = el('div', 'bg-panel2 border border-line rounded-lg p-3');
+      const head = el('div', 'flex items-center justify-between mb-2');
+      head.innerHTML = `<span class="font-display text-lg">Round ${i + 1}</span>
+        <span class="text-[11px] text-slate-500">${round.counted} active ballot${round.counted === 1 ? '' : 's'}</span>`;
+      box.appendChild(head);
+
+      const max = Math.max(1, ...round.tally.map((t) => t.votes));
+      round.tally.forEach((t) => {
+        const isWinner = round.winner && round.winner.id === t.id;
+        const isOut = round.eliminated && round.eliminated.some((e) => e.id === t.id);
+        const row = el('div', 'mb-1.5');
+        row.innerHTML = `
+          <div class="flex justify-between text-xs mb-0.5">
+            <span class="${isOut ? 'line-through text-slate-500' : ''} ${isWinner ? 'text-gold font-semibold' : ''}">
+              ${escapeHtml(t.title)} ${isWinner ? '🏆' : ''} ${isOut ? '❌' : ''}
+            </span>
+            <span class="text-slate-400">${t.votes}</span>
+          </div>
+          <div class="h-2 rounded bg-ink overflow-hidden">
+            <div class="h-full rounded" style="width:${(t.votes / max) * 100}%;
+              background:${isWinner ? '#ffce4d' : isOut ? '#475063' : '#7c5cff'}"></div>
+          </div>`;
+        box.appendChild(row);
+      });
+      wrap.appendChild(box);
+    });
+
+    if (r.winnerTitle) celebrate();
+  }
+
+  // ======================================================================
+  //  HOST SHARE BLOCK (QR + link)
+  // ======================================================================
+  function renderShareBlock() {
+    if (!isHost) return;
+    const url = `${location.origin}${location.pathname}?room=${roomId}`;
+    $('#shareLink').value = url;
+    $('#shareBlock').classList.remove('hidden');
+
+    const holder = $('#qrcode');
+    holder.innerHTML = '';
+    try {
+      new QRCode(holder, { text: url, width: 132, height: 132, correctLevel: QRCode.CorrectLevel.M });
+    } catch (e) {
+      holder.textContent = 'QR error';
+    }
+  }
+
+  // ======================================================================
+  //  NETWORK STATUS HELPERS
+  // ======================================================================
+  function setStatus(kind, text) {
+    const colors = { ok: '#22c55e', warn: '#ffce4d', err: '#ff3d6e' };
+    const dot = $('#netDot');
+    dot.style.background = colors[kind] || '#ffce4d';
+    dot.classList.toggle('pulse', kind !== 'err');
+    $('#netText').textContent = text;
+  }
+
+  function updateNetCount() {
+    const count = isHost ? state.peers.length : (state.peers.length || connections.size + 1);
+    if (state.phase) { /* no-op, keeps lint calm */ }
+    if (connections.size === 0 && !isHost) {
+      setStatus('warn', 'Connecting…');
+    } else {
+      setStatus('ok', `Connected · ${Math.min(count, MAX_PEERS)}/${MAX_PEERS}`);
+    }
+  }
+
+  function handlePeerError(err) {
+    console.warn('PeerJS error:', err && err.type, err);
+    const t = err && err.type;
+    if (t === 'peer-unavailable') {
+      // Host not (yet) reachable — retry shortly for guests.
+      if (!isHost) {
+        setStatus('warn', 'Host not found — retrying…');
+        setTimeout(() => { if (connections.size === 0) connectToHost(); }, 1500);
+      }
+    } else if (t === 'unavailable-id') {
+      setStatus('err', 'Room id already hosting elsewhere');
+    } else if (t === 'network' || t === 'server-error' || t === 'socket-error') {
+      setStatus('err', 'Signaling unavailable');
+    } else {
+      setStatus('err', 'Network error');
+    }
+  }
+
+  // ======================================================================
+  //  UI EVENT WIRING
+  // ======================================================================
+  function wireUiEvents() {
+    // Nominate a movie.
+    $('#nominateForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const input = $('#movieInput');
+      const title = input.value.trim();
+      if (!title) return;
+      dispatch({ type: 'nominate', title });
+      input.value = '';
+    });
+
+    // Host: lock nominations & start voting.
+    $('#lockBtn').addEventListener('click', () => dispatch({ type: 'startVoting' }));
+
+    // Submit my ranked ballot.
+    $('#submitVoteBtn').addEventListener('click', () => {
+      if (hasVotedLocally) return;
+      hasVotedLocally = true;
+      dispatch({ type: 'vote', ranking: ballotOrder.slice() });
+      renderBallotIfNeeded();
+    });
+
+    // Host: force-close voting.
+    $('#closeVoteBtn').addEventListener('click', () => dispatch({ type: 'closeVoting' }));
+
+    // Host: start a brand new round.
+    $('#restartBtn').addEventListener('click', () => {
+      ballotOrder = [];
+      hasVotedLocally = false;
+      dispatch({ type: 'reset' });
+    });
+
+    // Copy share link.
+    $('#copyLinkBtn').addEventListener('click', async () => {
+      const link = $('#shareLink').value;
+      try {
+        await navigator.clipboard.writeText(link);
+      } catch (e) {
+        // Fallback for non-secure contexts.
+        const i = $('#shareLink'); i.select(); document.execCommand('copy');
+      }
+      $('#copyMsg').textContent = 'Link copied!';
+      setTimeout(() => ($('#copyMsg').textContent = ''), 1800);
+    });
+
+    // Guest: in-app QR scanner.
+    wireScanner();
+  }
+
+  // ----------------------- html5-qrcode scanner -------------------------
+  function wireScanner() {
+    let scanner = null;
+    const wrap = $('#scannerWrap');
+
+    $('#openScanBtn').addEventListener('click', () => {
+      wrap.classList.remove('hidden');
+      $('#openScanBtn').classList.add('hidden');
+      scanner = new Html5Qrcode('reader');
+      scanner.start(
+        { facingMode: 'environment' },
+        { fps: 10, qrbox: { width: 220, height: 220 } },
+        (decodedText) => {
+          stopScanner(scanner).then(() => {
+            // The QR encodes the full room URL — just navigate to it.
+            try { location.href = decodedText; } catch (e) {}
+          });
+        },
+        () => { /* per-frame decode errors ignored */ }
+      ).catch(() => {
+        setStatus('err', 'Camera unavailable');
+        wrap.classList.add('hidden');
+        $('#openScanBtn').classList.remove('hidden');
+      });
+    });
+
+    $('#closeScanBtn').addEventListener('click', () => {
+      stopScanner(scanner);
+      wrap.classList.add('hidden');
+      $('#openScanBtn').classList.remove('hidden');
+    });
+  }
+
+  function stopScanner(scanner) {
+    if (!scanner) return Promise.resolve();
+    return scanner.stop().then(() => scanner.clear()).catch(() => {});
+  }
+
+  // ----------------------------- Confetti -------------------------------
+  let confettiFired = false;
+  function celebrate() {
+    if (confettiFired) return;       // only once per results screen
+    confettiFired = true;
+    const colors = ['#ff3d6e', '#7c5cff', '#ffce4d', '#22c55e', '#38bdf8'];
+    for (let i = 0; i < 80; i++) {
+      const c = el('div', 'confetti');
+      c.style.left = Math.random() * 100 + 'vw';
+      c.style.background = colors[i % colors.length];
+      c.style.animation = `fall ${2 + Math.random() * 2}s linear ${Math.random()}s forwards`;
+      document.body.appendChild(c);
+      setTimeout(() => c.remove(), 5000);
+    }
+  }
+  // Reset confetti guard whenever we leave results.
+  function renderResultsGuardReset() {
+    if (state.phase !== 'results') confettiFired = false;
+  }
+  const _origRenderAll = renderAll;
+  // Wrap renderAll to also reset the confetti guard between rounds.
+  // eslint-disable-next-line no-func-assign
+  renderAll = function () { renderResultsGuardReset(); _origRenderAll(); };
+
+  // ============================== GO! ==============================
+  window.addEventListener('load', boot);
+  </script>
+</body>
+</html>
