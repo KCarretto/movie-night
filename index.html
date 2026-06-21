@@ -230,7 +230,7 @@
               <span id="letterboxdInfoWrap" class="relative">
                 <button id="letterboxdInfoBtn" type="button" aria-label="Letterboxd import instructions"
                         class="btn w-6 h-6 mr-1 rounded-full bg-panel2 border border-line flex items-center justify-center text-[11px] text-slate-300"><i class="fa-solid fa-info"></i></button>
-                <span id="letterboxdInfoTip" class="hidden absolute right-0 top-7 z-50 w-60 card p-3 text-xs text-slate-300 leading-snug normal-case">You may export your data from Letterboxd <a href="https://letterboxd.com/settings/data/" target="_blank" rel="noopener noreferrer" class="text-accent2 underline">here</a>, then use this option to import the downloaded 'ratings.json'.</span>
+                <span id="letterboxdInfoTip" class="hidden absolute right-0 top-6 pt-1 z-50 w-60 text-xs text-slate-300 leading-snug normal-case"><span class="block card p-3">You may export your data from Letterboxd <a href="https://letterboxd.com/settings/data/" target="_blank" rel="noopener noreferrer" class="text-accent2 underline">here</a>, then use this option to import the downloaded 'ratings.json'.</span></span>
               </span>
             </div>
             <button id="syncDeviceBtn" type="button"
@@ -480,7 +480,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.2</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.3</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -2989,9 +2989,23 @@
         e.stopPropagation();
         lbInfoTip.classList.toggle('hidden');
       });
-      lbInfoWrap.addEventListener('mouseenter', () => lbInfoTip.classList.remove('hidden'));
-      lbInfoWrap.addEventListener('mouseleave', () => lbInfoTip.classList.add('hidden'));
-      // Keep clicks inside the tooltip (e.g. the link) from closing the menu.
+      // Reveal on hover, but delay hiding so the cursor can travel into the
+      // tooltip to click the link without it closing immediately.
+      let lbHideTimer = null;
+      const lbShowTip = () => {
+        if (lbHideTimer) { clearTimeout(lbHideTimer); lbHideTimer = null; }
+        lbInfoTip.classList.remove('hidden');
+      };
+      const lbHideTip = () => {
+        if (lbHideTimer) clearTimeout(lbHideTimer);
+        lbHideTimer = setTimeout(() => lbInfoTip.classList.add('hidden'), 300);
+      };
+      lbInfoWrap.addEventListener('mouseenter', lbShowTip);
+      lbInfoWrap.addEventListener('mouseleave', lbHideTip);
+      // Keep the tooltip open while the cursor is over it, and keep clicks
+      // inside the tooltip (e.g. the link) from closing the menu.
+      lbInfoTip.addEventListener('mouseenter', lbShowTip);
+      lbInfoTip.addEventListener('mouseleave', lbHideTip);
       lbInfoTip.addEventListener('click', (e) => e.stopPropagation());
     }
 
