@@ -399,7 +399,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.8</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.9</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -1280,10 +1280,9 @@
         losers = filtered;
       }
       if (losers.length > 1) {
-        // Tiebreaker 3 (Deterministic Fallback): break any remaining perfect tie
-        // by sorting alphabetically by movie ID so results stay predictable.
-        losers.sort((a, b) => String(a).localeCompare(String(b)));
-        tieBreak = 'Tie-breaker 3 (deterministic alphabetical fallback) decided the remaining exact tie.';
+        // Tiebreaker 3 (Coin Flip): break any remaining perfect tie randomly.
+        losers.sort(() => Math.random() - 0.5);
+        tieBreak = 'Tie-breaker 3 (coin flip) decided the remaining exact tie.';
       }
       // Enforce single elimination: only the single worst-performing candidate.
       losers = [losers[0]];
@@ -2069,6 +2068,11 @@
     renderHistory();
   }
 
+  function removeNight(nightId) {
+    saveHistory(loadHistory().filter((h) => h.id !== nightId));
+    renderHistory();
+  }
+
   function removeWatched(title) {
     saveWatched(loadWatched().filter((w) => normTitle(w.title) !== normTitle(title)));
     shareSeen();
@@ -2112,7 +2116,10 @@
       card.innerHTML = `
         <div class="flex items-center justify-between gap-2">
           <div class="font-display text-lg">${escapeHtml(dateStr)}</div>
-          <div class="text-[10px] text-slate-500 uppercase tracking-wider">${escapeHtml(n.room || '')}</div>
+          <div class="flex items-center gap-2">
+            <div class="text-[10px] text-slate-500 uppercase tracking-wider">${escapeHtml(n.room || '')}</div>
+            <button class="remove-night btn w-6 h-6 rounded bg-ink border border-line text-slate-500 hover:text-accent flex items-center justify-center text-xs shrink-0" data-night="${escapeHtml(n.id)}" title="Remove this night from history"><i class="fa-solid fa-trash"></i></button>
+          </div>
         </div>
         <div class="text-sm">Winner: <span class="text-gold font-semibold">${n.winner ? escapeHtml(n.winner) : '—'}</span></div>
         <div class="text-sm">Watched: <span class="${n.watched ? 'text-emerald-300 font-semibold' : 'text-slate-500'}">${n.watched ? escapeHtml(n.watched) : 'not set'}</span></div>
@@ -2128,6 +2135,7 @@
       card.querySelectorAll('.mark-night-watched').forEach((b) => {
         b.addEventListener('click', () => setNightWatched(b.dataset.night, b.dataset.title));
       });
+      card.querySelector('.remove-night').addEventListener('click', () => removeNight(n.id));
       wireSeenIndicator(card);
       wrap.appendChild(card);
     });
