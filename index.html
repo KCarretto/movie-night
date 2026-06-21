@@ -1112,9 +1112,22 @@
     saveWatchlist(list);
     afterTasteChange();
   }
+  function addToWatchlistSilent(title) {
+    const clean = String(title || '').trim();
+    if (!clean) return;
+    const list = loadWatchlist();
+    if (list.some((w) => normTitle(w.title) === normTitle(clean))) return;
+    list.push({ title: clean, addedAt: Date.now() });
+    saveWatchlist(list);
+    shareVector();
+  }
   function removeFromWatchlist(title) {
     saveWatchlist(loadWatchlist().filter((w) => normTitle(w.title) !== normTitle(title)));
     afterTasteChange();
+  }
+  function removeFromWatchlistSilent(title) {
+    saveWatchlist(loadWatchlist().filter((w) => normTitle(w.title) !== normTitle(title)));
+    shareVector();
   }
 
   // Interested: [{ title, interest (1-5), at }] — "how interested" ratings from
@@ -2828,7 +2841,7 @@
             </button>
             <button class="rec-watchlist btn w-full text-xs font-semibold py-1.5 rounded-lg bg-panel2 border border-line ${onList ? 'text-emerald-300 border-emerald-500/40' : 'text-slate-300'}"
                     data-title="${safeTitle}" aria-pressed="${onList ? 'true' : 'false'}">
-              <i class="fa-${onList ? 'solid' : 'regular'} fa-bookmark mr-1"></i>${onList ? 'On watchlist' : 'Add to Watchlist'}
+              <i class="fa-${onList ? 'solid' : 'regular'} fa-bookmark mr-1"></i>${onList ? 'Added to Watchlist' : 'Add to Watchlist'}
             </button>
           </div>
         </div>
@@ -2976,8 +2989,17 @@
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const title = btn.dataset.title;
-        if (inWatchlist(title)) removeFromWatchlist(title);
-        else addToWatchlist(title);
+        if (inWatchlist(title)) {
+          removeFromWatchlistSilent(title);
+          btn.setAttribute('aria-pressed', 'false');
+          btn.className = 'rec-watchlist btn w-full text-xs font-semibold py-1.5 rounded-lg bg-panel2 border border-line text-slate-300';
+          btn.innerHTML = '<i class="fa-regular fa-bookmark mr-1"></i>Add to Watchlist';
+        } else {
+          addToWatchlistSilent(title);
+          btn.setAttribute('aria-pressed', 'true');
+          btn.className = 'rec-watchlist btn w-full text-xs font-semibold py-1.5 rounded-lg bg-panel2 border border-emerald-500/40 text-emerald-300';
+          btn.innerHTML = '<i class="fa-solid fa-bookmark mr-1"></i>Added to Watchlist';
+        }
       });
     });
     track.querySelectorAll('.rec-card').forEach((card) => {
