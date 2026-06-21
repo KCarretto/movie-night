@@ -636,6 +636,28 @@
     </div>
   </div>
 
+  <!-- ===================== RATE MOVIE MODAL ===================== -->
+  <div id="rateModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div id="rateModalBackdrop" class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
+    <div class="card relative z-10 max-w-sm w-full p-5 space-y-4">
+      <div class="flex items-center justify-between gap-3">
+        <h3 id="rateModalTitle" class="font-display text-xl truncate text-left uppercase tracking-wider text-slate-100">RATE MOVIE</h3>
+        <button id="closeRateModalBtn" class="btn w-8 h-8 rounded-lg bg-panel2 border border-line text-slate-300" aria-label="Close">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <div class="space-y-4 text-center">
+        <p class="text-sm text-slate-300">How would you rate this movie?</p>
+        <div class="flex flex-col items-center justify-center gap-2 py-2">
+          <div id="rateModalStars" class="rate-modal-stars inline-flex gap-1 text-3xl" data-title=""></div>
+        </div>
+        <div class="flex gap-2 pt-2">
+          <button id="rateModalSkipBtn" class="btn flex-1 bg-panel2 border border-line text-xs font-semibold py-2.5 rounded-lg text-slate-300">Mark Watched (No Rating)</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ===================== TASTE-TRAINING WIZARD ===================== -->
   <div id="trainModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
     <div id="trainBackdrop" class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
