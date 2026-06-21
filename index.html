@@ -164,6 +164,11 @@
     .rec-card:hover, .rec-card:focus-within { border-color: #7c5cff; }
     .rec-card:active { transform: translateY(1px); }
     .rec-poster { width: 100%; height: 200px; border-radius: 0; }
+    /* Loading spinner (recommendation refresh + training wizard). */
+    .spinner { width: 34px; height: 34px; border-radius: 50%;
+      border: 3px solid rgba(124,92,255,.25); border-top-color: #7c5cff;
+      animation: spin .7s linear infinite; display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .rec-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
       overflow: hidden; }
     .rec-why-wrap { position: relative; display: inline-flex; max-width: 100%; }
@@ -347,6 +352,10 @@
           </button>
         </div>
       </div>
+      <!-- Train: opens a focused wizard to refine the user's taste vector. -->
+      <button id="recTrainBtn" type="button" class="btn btn-primary text-white w-full text-sm font-semibold py-2.5 rounded-lg" aria-label="Train your recommendations">
+        <i class="fa-solid fa-wand-magic-sparkles mr-1.5"></i>Train your recommendations
+      </button>
       <div class="relative">
         <button id="recPrev" type="button" class="rec-nav rec-prev" aria-label="Scroll recommendations left">
           <i class="fa-solid fa-chevron-left"></i>
@@ -355,6 +364,10 @@
         <button id="recNext" type="button" class="rec-nav rec-next" aria-label="Scroll recommendations right">
           <i class="fa-solid fa-chevron-right"></i>
         </button>
+        <!-- Loading spinner shown while new recommendations are rendered. -->
+        <div id="recSpinner" class="hidden absolute inset-0 z-20 flex items-center justify-center bg-ink/70 backdrop-blur-sm rounded-lg" aria-live="polite" aria-label="Loading recommendations">
+          <span class="spinner"></span>
+        </div>
       </div>
       <p id="recEmpty" class="hidden text-sm text-slate-500 italic">
         Rate a few movies in your History to personalise these recommendations.
@@ -479,6 +492,18 @@
         <p id="historyEmpty" class="text-sm text-slate-500 italic">No movie nights recorded yet.</p>
       </div>
 
+      <!-- Watchlist: movies the user saved to watch later. Same format/location
+           style as the ratings (watched) card below, rendered above it. -->
+      <div class="card p-4 space-y-3">
+        <div class="flex items-center justify-between gap-3 flex-wrap">
+          <h2 class="font-display text-2xl">YOUR WATCHLIST</h2>
+          <span class="text-xs text-slate-400 uppercase tracking-wider">Saved to watch later</span>
+        </div>
+        <p class="text-xs text-slate-500 -mt-1">Saved movies are weighted heavily in your recommendations and resurface in your feed.</p>
+        <div id="watchlistList" class="space-y-2"></div>
+        <p id="watchlistEmpty" class="text-sm text-slate-500 italic">Your watchlist is empty. Add movies from the recommendations or the Train flow.</p>
+      </div>
+
       <div class="card p-4 space-y-3">
         <div class="flex items-center justify-between gap-3 flex-wrap">
           <h2 class="font-display text-2xl">MOVIES YOU'VE WATCHED</h2>
@@ -502,7 +527,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 3</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 4</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -582,6 +607,45 @@
         </button>
       </div>
       <div id="recDetailBody" class="space-y-3"></div>
+    </div>
+  </div>
+
+  <!-- ===================== TASTE-TRAINING WIZARD ===================== -->
+  <div id="trainModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div id="trainBackdrop" class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
+    <div class="card relative z-10 max-w-md w-full p-5 space-y-4">
+      <div class="flex items-center justify-between gap-3">
+        <h3 class="font-display text-2xl">TRAIN YOUR TASTE</h3>
+        <button id="closeTrainBtn" class="btn w-8 h-8 rounded-lg bg-panel2 border border-line text-slate-300" aria-label="Close training">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <p class="text-xs text-slate-500 -mt-2">Rate movies one at a time to sharpen your recommendations in real time.</p>
+      <div id="trainBody" class="space-y-3"></div>
+      <!-- Rating sub-prompt, shown after "Watched" / "Interested". -->
+      <div id="trainRatePrompt" class="hidden space-y-2">
+        <p id="trainRateLabel" class="text-sm text-slate-300"></p>
+        <div class="flex items-center justify-between gap-2">
+          <span id="trainRateStars" class="train-stars inline-flex gap-1 text-2xl"></span>
+          <button id="trainRateCancel" class="btn text-xs font-semibold px-3 py-1.5 rounded-lg bg-panel2 border border-line text-slate-300">Cancel</button>
+        </div>
+      </div>
+      <!-- Four training actions. -->
+      <div id="trainActions" class="grid grid-cols-2 gap-2">
+        <button id="trainNotInterested" class="btn text-sm font-semibold py-2.5 rounded-lg bg-panel2 border border-line text-slate-300">
+          <i class="fa-solid fa-thumbs-down mr-1"></i>Not interested
+        </button>
+        <button id="trainWatched" class="btn text-sm font-semibold py-2.5 rounded-lg bg-panel2 border border-line text-slate-300">
+          <i class="fa-solid fa-circle-check mr-1"></i>Watched
+        </button>
+        <button id="trainInterested" class="btn text-sm font-semibold py-2.5 rounded-lg bg-panel2 border border-line text-slate-300">
+          <i class="fa-solid fa-star mr-1"></i>Interested
+        </button>
+        <button id="trainAddWatchlist" class="btn btn-primary text-white text-sm font-semibold py-2.5 rounded-lg">
+          <i class="fa-regular fa-bookmark mr-1"></i>Add to Watchlist
+        </button>
+      </div>
+      <p id="trainEmpty" class="hidden text-sm text-slate-500 italic">No more movies to train on right now — come back after rating a few.</p>
     </div>
   </div>
 
@@ -963,6 +1027,13 @@
   // titles+ratings are shared with the room (so peers see who's seen what).
   const HISTORY_KEY = 'movieNightHistory';
   const WATCHED_KEY = 'movieNightWatched';
+  // Watchlist + training-signal stores (local only). Watchlist = movies the user
+  // wants to see; interested = "how interested" ratings from the training flow;
+  // notInterested = titles the user explicitly skipped. All three feed the taste
+  // vector / recommendation engine (see buildTasteProfile).
+  const WATCHLIST_KEY = 'movieNightWatchlist';
+  const INTERESTED_KEY = 'movieNightInterested';
+  const NOT_INTERESTED_KEY = 'movieNightNotInterested';
 
   function loadJson(key, fallback) {
     try { const v = JSON.parse(localStorage.getItem(key) || 'null'); return v == null ? fallback : v; }
@@ -1014,6 +1085,66 @@
   // Broadcast my taste vector to the room so peers can match the group's vibe.
   function shareVector() {
     dispatch({ type: 'setVector', vector: myTasteVector() });
+  }
+
+  // ---- Watchlist + training-signal stores -----------------------------------
+  // Watchlist: [{ title, addedAt }] — movies the user wants to see. Heavily
+  // weighted in the taste vector and periodically injected into the rec feed.
+  function loadWatchlist() { const v = loadJson(WATCHLIST_KEY, []); return Array.isArray(v) ? v : []; }
+  function saveWatchlist(list) { saveJson(WATCHLIST_KEY, list); }
+  function inWatchlist(title) {
+    return loadWatchlist().some((w) => normTitle(w.title) === normTitle(title));
+  }
+  function addToWatchlist(title) {
+    const clean = String(title || '').trim();
+    if (!clean) return;
+    const list = loadWatchlist();
+    if (list.some((w) => normTitle(w.title) === normTitle(clean))) return;
+    list.push({ title: clean, addedAt: Date.now() });
+    saveWatchlist(list);
+    afterTasteChange();
+  }
+  function removeFromWatchlist(title) {
+    saveWatchlist(loadWatchlist().filter((w) => normTitle(w.title) !== normTitle(title)));
+    afterTasteChange();
+  }
+
+  // Interested: [{ title, interest (1-5), at }] — "how interested" ratings from
+  // the training flow. A positive taste signal scaled by the interest level.
+  function loadInterested() { const v = loadJson(INTERESTED_KEY, []); return Array.isArray(v) ? v : []; }
+  function saveInterested(list) { saveJson(INTERESTED_KEY, list); }
+  function upsertInterested(title, interest) {
+    const clean = String(title || '').trim();
+    if (!clean) return;
+    const list = loadInterested();
+    const existing = list.find((w) => normTitle(w.title) === normTitle(clean));
+    if (existing) existing.interest = interest;
+    else list.push({ title: clean, interest: interest || 0, at: Date.now() });
+    saveInterested(list);
+    afterTasteChange();
+  }
+
+  // Not interested: [{ title, at }] — titles the user skipped in training. A
+  // negative signal that also hides the title from future recommendations.
+  function loadNotInterested() { const v = loadJson(NOT_INTERESTED_KEY, []); return Array.isArray(v) ? v : []; }
+  function saveNotInterested(list) { saveJson(NOT_INTERESTED_KEY, list); }
+  function markNotInterested(title) {
+    const clean = String(title || '').trim();
+    if (!clean) return;
+    const list = loadNotInterested();
+    if (!list.some((w) => normTitle(w.title) === normTitle(clean))) {
+      list.push({ title: clean, at: Date.now() });
+      saveNotInterested(list);
+    }
+    afterTasteChange();
+  }
+
+  // Recompute + re-share the taste vector and re-render after any taste-shaping
+  // change (watchlist / interested / not-interested). Recommendations re-rank on
+  // the next render because recSignature() folds in all three stores.
+  function afterTasteChange() {
+    shareVector();
+    if (typeof renderAll === 'function') renderAll();
   }
 
   // Gather everyone (by display name) who has seen a given title, with rating.
@@ -2081,6 +2212,14 @@
     // Minimum number of rated/nominated titles needed before switching to
     // personalised mode (below this we use cold-start).
     personaliseThreshold: 3,
+    // Taste-vector strengths for the training-flow signals. The watchlist is an
+    // explicit "I want to see this", so it is weighted as strongly as a top
+    // rating; not-interested marks push the parallel dislike vector.
+    watchlistStrength: 2.0,
+    notInterestedStrength: 1.5,
+    // Roughly how many recommendation slots to reserve for watchlist titles so
+    // saved movies resurface periodically in the feed.
+    watchlistInjectFraction: 0.15,
     // Maximum keywords extracted per movie description.
     maxKeywords: 30,
     // Minimum word length to keep as a keyword.
@@ -2272,11 +2411,56 @@
       });
     });
 
-    const hasSignal = rated + watched.length + loadHistory().length >= REC_CONFIG.personaliseThreshold;
+    // ---- Training-flow + watchlist signals --------------------------------
+    // The watchlist is a strong, explicit "I want to see this" signal, so it is
+    // weighted heavily — comparable to a high star rating — and feeds the taste
+    // vector directly. Interested ratings scale with the chosen level, and
+    // not-interested marks push the dislike vector.
+    const watchlist = loadWatchlist();
+    watchlist.forEach((entry) => {
+      const meta = movieMeta(entry.title);
+      if (!meta) return;
+      applySignals(meta, REC_CONFIG.watchlistStrength);
+      const emb = movieEmbedding(meta);
+      if (!isVector(emb) || emb.length === 0) return;
+      userVector = accumulate(userVector, emb, REC_CONFIG.watchlistStrength);
+      userWeight += REC_CONFIG.watchlistStrength;
+      positiveSamples.push({ title: meta.title, emb });
+    });
+
+    const interested = loadInterested();
+    interested.forEach((entry) => {
+      const meta = movieMeta(entry.title);
+      if (!meta) return;
+      // Interest 1..5 → strength ~0.4..2.0 (0 / unrated → mild positive 0.6).
+      const lvl = entry.interest || 0;
+      const strength = lvl ? (lvl / 5) * 2 : 0.6;
+      applySignals(meta, strength);
+      const emb = movieEmbedding(meta);
+      if (!isVector(emb) || emb.length === 0) return;
+      userVector = accumulate(userVector, emb, strength);
+      userWeight += strength;
+      positiveSamples.push({ title: meta.title, emb });
+    });
+
+    const notInterested = loadNotInterested();
+    notInterested.forEach((entry) => {
+      const meta = movieMeta(entry.title);
+      if (!meta) return;
+      applySignals(meta, -REC_CONFIG.notInterestedStrength);
+      const emb = movieEmbedding(meta);
+      if (!isVector(emb) || emb.length === 0) return;
+      dislikeVector = accumulate(dislikeVector, emb, REC_CONFIG.notInterestedStrength);
+      dislikeWeight += REC_CONFIG.notInterestedStrength;
+    });
+
+    const trainingSignals = watchlist.length + interested.length + notInterested.length;
+    const hasSignal = rated + watched.length + loadHistory().length + trainingSignals
+                      >= REC_CONFIG.personaliseThreshold;
 
     // Normalise the cumulative affinity maps into an *average* scale so that
     // users with lots of history don't produce runaway, unbounded weights.
-    const totalSignals = watched.length + rated + loadHistory().length;
+    const totalSignals = watched.length + rated + loadHistory().length + trainingSignals;
     if (totalSignals > 0) {
       [genreWeights, actorWeights, directorWeights, keywordWeights].forEach((map) => {
         map.forEach((value, key) => map.set(key, value / totalSignals));
@@ -2428,11 +2612,15 @@
     // fresh to 100% of the room.
     const seenSet      = roomSeenTitles();
     const nominatedSet = new Set(state.movies.map((m) => normTitle(m.title)));
+    // Titles the user explicitly marked "not interested" in the training flow
+    // are suppressed from the feed entirely.
+    const skipSet      = new Set(loadNotInterested().map((x) => normTitle(x.title)));
+    const watchlistSet = new Set(loadWatchlist().map((x) => normTitle(x.title)));
     const candidates   = [];
     for (const m of MOVIE_DB) {
       if (!m || !m.title || !m.art) continue;
       const nt = normTitle(m.title);
-      if (seenSet.has(nt) || nominatedSet.has(nt)) continue;
+      if (seenSet.has(nt) || nominatedSet.has(nt) || skipSet.has(nt)) continue;
       let score, why = null;
       if (personalised) {
         const res = scoreCandidate(m, profile);
@@ -2441,7 +2629,9 @@
       } else {
         score = coldStartScore(m);
       }
-      candidates.push({ movie: m, score, why, isNew: isNewMovie(m), personalised });
+      const onWatchlist = watchlistSet.has(nt);
+      if (onWatchlist) why = '📌 On your watchlist';
+      candidates.push({ movie: m, score, why, isNew: isNewMovie(m), personalised, fromWatchlist: onWatchlist });
     }
     candidates.sort((a, b) => b.score - a.score);
     return blendRecommendations(candidates, maxResults);
@@ -2460,13 +2650,23 @@
     return out;
   }
 
-  // Recommendations only change when the catalogue, the watched/rated list or the
-  // current nominations change, so memoise to avoid rescoring on every render.
+  // Recommendations only change when the catalogue, the watched/rated list, the
+  // current nominations, or the training stores change, so memoise to avoid
+  // rescoring on every render.
   let recCache = { sig: null, list: [], personalised: false, totalAvailable: 0 };
+  // Background precompute: a queue of ready-to-show batches for the *current*
+  // signature so a Refresh tap can render instantly, plus the cached full
+  // ranking so replenishing a batch never re-scores the catalogue.
+  let recPrecompute = { sig: null, ranked: null, batches: [] };
   function recSignature() {
     const w    = loadWatched().map((x) => normTitle(x.title) + ':' + (x.rating || 0)).join('|');
     const noms = state.movies.map((m) => normTitle(m.title)).join('|');
     const hist = loadHistory().length;
+    // Training stores re-rank recs: watchlist (with order), interest levels and
+    // not-interested marks all reshape the taste vector and candidate set.
+    const wl   = loadWatchlist().map((x) => normTitle(x.title)).join('|');
+    const intr = loadInterested().map((x) => normTitle(x.title) + ':' + (x.interest || 0)).join('|');
+    const ni   = loadNotInterested().map((x) => normTitle(x.title)).join('|');
     // Group-taste inputs: peers' shared seen lists + their taste vectors, plus
     // whether embeddings.bin has finished loading. Changes here re-rank recs.
     const seen = (state && state.seen) || {};
@@ -2476,24 +2676,82 @@
     const pvSig = Object.keys(pv).sort().join('|');
     const embReady = window.EMBEDDINGS_BUFFER ? '1' : '0';
     return MOVIE_DB.length + '#' + w + '#' + noms + '#' + hist
+         + '#' + wl + '#' + intr + '#' + ni
          + '#' + seenSig + '#' + pvSig + '#' + embReady;
   }
+
+  // Carve the next unseen batch out of the full ranking, marking those titles as
+  // seen for this session so subsequent batches don't repeat them. Reserves a
+  // few slots for watchlist titles so saved movies are periodically injected
+  // into the active feed rather than relying purely on their organic rank.
+  function nextRecBatch(ranked) {
+    const seen = loadSeenRecommendations();
+    const unseen = ranked.filter((rec) => !seen.has(normTitle(rec.movie.title)));
+    const reserve = Math.max(1, Math.round(REC_CONFIG.maxResults * REC_CONFIG.watchlistInjectFraction));
+    const watchlistRecs = unseen.filter((rec) => rec.fromWatchlist);
+    const others = unseen.filter((rec) => !rec.fromWatchlist);
+    // Fill most of the batch with the top organic picks, then splice in a few
+    // watchlist titles at spread-out positions.
+    const batch = others.slice(0, REC_CONFIG.maxResults);
+    if (watchlistRecs.length) {
+      const step = Math.max(2, Math.floor(REC_CONFIG.maxResults / (reserve + 1)));
+      let inserted = 0, pos = step;
+      for (const rec of watchlistRecs) {
+        if (inserted >= reserve) break;
+        batch.splice(Math.min(pos, batch.length), 0, rec);
+        inserted++;
+        pos += step + 1;
+      }
+    }
+    const final = batch.slice(0, REC_CONFIG.maxResults);
+    final.forEach((rec) => seen.add(normTitle(rec.movie.title)));
+    saveSeenRecommendations(seen);
+    return final;
+  }
+
+  // Ensure the precompute cache matches the current signature, (re)scoring the
+  // catalogue once when the signature changes.
+  function ensurePrecompute(sig) {
+    if (recPrecompute.sig !== sig) {
+      recPrecompute = { sig, ranked: computeRecommendations(MOVIE_DB.length), batches: [] };
+    }
+    return recPrecompute;
+  }
+
+  // Pre-compute up to `count` additional batches in the background so a Refresh
+  // renders from a ready queue instead of blocking on a fresh scoring pass.
+  function precomputeRecBatches(count = 2) {
+    const sig = recSignature();
+    const pc = ensurePrecompute(sig);
+    while (pc.batches.length < count) {
+      const batch = nextRecBatch(pc.ranked);
+      if (!batch.length) break;       // exhausted the unseen catalogue
+      pc.batches.push(batch);
+    }
+  }
+  // Kick off precompute off the critical path (idle time when available).
+  function schedulePrecompute() {
+    const run = () => { try { precomputeRecBatches(2); } catch (e) {} };
+    if (window.requestIdleCallback) window.requestIdleCallback(run, { timeout: 1500 });
+    else setTimeout(run, 0);
+  }
+
   function getRecommendations(options = {}) {
     const forceRefresh = !!options.forceRefresh;
     const sig = recSignature();
     if (forceRefresh || recCache.sig !== sig) {
-      const ranked = computeRecommendations(MOVIE_DB.length);
-      const seen = loadSeenRecommendations();
-      const unseen = ranked.filter((rec) => !seen.has(normTitle(rec.movie.title)));
-      const list = unseen.slice(0, REC_CONFIG.maxResults);
-      list.forEach((rec) => seen.add(normTitle(rec.movie.title)));
-      saveSeenRecommendations(seen);
+      const pc = ensurePrecompute(sig);
+      // Serve a precomputed batch instantly when one is queued; otherwise carve
+      // the next batch synchronously.
+      const list = pc.batches.length ? pc.batches.shift() : nextRecBatch(pc.ranked);
       recCache = {
         sig,
         list,
         personalised: list.length > 0 && list[0].personalised,
-        totalAvailable: ranked.length,
+        totalAvailable: pc.ranked.length,
       };
+      // Top the queue back up for the next refresh, off the critical path.
+      schedulePrecompute();
     }
     return recCache;
   }
@@ -2505,6 +2763,7 @@
     const lang = languageBadgeHtml(m);
     const seen = seenIndicatorHtml(m.title);
     const safeTitle = escapeHtml(m.title);
+    const onList = inWatchlist(m.title);
     const why = rec.why
       ? `<span class="rec-why-wrap">
            <span class="rec-why" tabindex="0" aria-label="Why this was recommended">${escapeHtml(rec.why)}</span>
@@ -2526,6 +2785,10 @@
             <button class="rec-nominate btn w-full text-xs font-semibold py-1.5 rounded-lg ${canNominate ? 'btn-primary text-white' : 'opacity-40 cursor-not-allowed'}"
                     data-title="${safeTitle}" ${canNominate ? '' : 'disabled'}>
               <i class="fa-solid fa-plus mr-1"></i>Nominate
+            </button>
+            <button class="rec-watchlist btn w-full text-xs font-semibold py-1.5 rounded-lg bg-panel2 border border-line ${onList ? 'text-emerald-300 border-emerald-500/40' : 'text-slate-300'}"
+                    data-title="${safeTitle}" aria-pressed="${onList ? 'true' : 'false'}">
+              <i class="fa-${onList ? 'solid' : 'regular'} fa-bookmark mr-1"></i>${onList ? 'On watchlist' : 'Add to Watchlist'}
             </button>
           </div>
         </div>
@@ -2668,16 +2931,204 @@
       if (btn.disabled) return;
       btn.addEventListener('click', () => dispatch({ type: 'nominate', title: btn.dataset.title }));
     });
+    track.querySelectorAll('.rec-watchlist').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const title = btn.dataset.title;
+        if (inWatchlist(title)) removeFromWatchlist(title);
+        else addToWatchlist(title);
+      });
+    });
     track.querySelectorAll('.rec-card').forEach((card) => {
       card.addEventListener('click', (e) => {
-        if (e.target.closest('.rec-nominate') || e.target.closest('.rec-why-wrap')) return;
+        if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-why-wrap')) return;
         openRecommendationDetail(card.dataset.title || '');
       });
       card.addEventListener('keydown', (e) => {
-        if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-why-wrap')) return;
+        if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-why-wrap')) return;
         e.preventDefault();
         openRecommendationDetail(card.dataset.title || '');
       });
+    });
+  }
+
+  // Toggle the loading spinner overlaid on the recommendation carousel.
+  function showRecSpinner(on) {
+    const sp = $('#recSpinner');
+    if (sp) sp.classList.toggle('hidden', !on);
+  }
+
+  // Refresh handler: show a spinner immediately, then render the next batch on a
+  // later frame so the spinner actually paints even if scoring has to run. The
+  // precompute queue usually makes this instant; the spinner covers the cold
+  // path (queue empty / signature changed).
+  function refreshRecommendations() {
+    showRecSpinner(true);
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      try { renderRecommendations(true); }
+      finally { showRecSpinner(false); }
+    }));
+  }
+
+  // ======================================================================
+  //  TASTE-TRAINING WIZARD
+  // ======================================================================
+  // Presents one movie at a time with four actions (Not interested / Watched /
+  // Interested / Add to Watchlist). Every action writes a training signal that
+  // immediately reshapes the taste vector and the recommendation feed (the
+  // stores feed buildTasteProfile and recSignature), so the queue is rebuilt
+  // from freshly-scored candidates whenever it runs dry.
+  let trainQueue = [];
+  let trainCurrent = null;
+  let trainPendingAction = null;   // 'watched' | 'interested' while rating
+
+  // Build a fresh queue of candidate movies for training, skipping anything the
+  // user has already acted on (watched / watchlisted / rated-interest / skipped).
+  function buildTrainQueue() {
+    if (!MOVIE_DB.length) return [];
+    const acted = new Set([
+      ...loadWatched().map((x) => normTitle(x.title)),
+      ...loadWatchlist().map((x) => normTitle(x.title)),
+      ...loadInterested().map((x) => normTitle(x.title)),
+      ...loadNotInterested().map((x) => normTitle(x.title)),
+    ]);
+    const ranked = computeRecommendations(Math.max(60, REC_CONFIG.maxResults * 3));
+    return ranked.map((r) => r.movie).filter((m) => m && !acted.has(normTitle(m.title)));
+  }
+
+  function openTraining() {
+    if (!MOVIE_DB.length) return;
+    trainQueue = buildTrainQueue();
+    trainCurrent = null;
+    const modal = $('#trainModal');
+    if (modal) modal.classList.remove('hidden');
+    trainNext();
+  }
+
+  function closeTraining() {
+    const modal = $('#trainModal');
+    if (modal) modal.classList.add('hidden');
+    hideTrainRate();
+  }
+
+  // Advance to the next training card, rebuilding the queue when it empties so
+  // the newest signals are reflected.
+  function trainNext() {
+    hideTrainRate();
+    if (!trainQueue.length) trainQueue = buildTrainQueue();
+    trainCurrent = trainQueue.shift() || null;
+    renderTrainCard();
+  }
+
+  function renderTrainCard() {
+    const body = $('#trainBody');
+    const empty = $('#trainEmpty');
+    const actions = $('#trainActions');
+    if (!body) return;
+    if (!trainCurrent) {
+      body.innerHTML = '';
+      if (empty) empty.classList.remove('hidden');
+      if (actions) actions.classList.add('hidden');
+      return;
+    }
+    if (empty) empty.classList.add('hidden');
+    if (actions) actions.classList.remove('hidden');
+    const m = trainCurrent;
+    const safeTitle = escapeHtml(m.title || '');
+    const year = m.year ? ` <span class="text-slate-400">(${escapeHtml(String(m.year))})</span>` : '';
+    const genres = genreTagsHtml(m);
+    const lang = languageBadgeHtml(m);
+    const ratings = ratingsLine(m);
+    const description = m.description
+      ? `<p class="text-xs text-slate-400 leading-relaxed line-clamp-4">${escapeHtml(m.description)}</p>`
+      : '';
+    body.innerHTML = `
+      <div class="flex gap-3">
+        <div class="shrink-0">${posterHtml(m, 'w-24 h-36')}</div>
+        <div class="min-w-0 space-y-1.5">
+          <div class="font-display text-lg leading-tight">${safeTitle}${year}</div>
+          ${genres ? `<div class="flex flex-wrap gap-1">${genres}</div>` : ''}
+          ${lang ? `<div class="text-xs">${lang}</div>` : ''}
+          ${ratings ? `<div class="text-[11px] text-slate-400">${ratings}</div>` : ''}
+        </div>
+      </div>
+      ${description}`;
+  }
+
+  // Show the star sub-prompt for "Watched" / "Interested".
+  function showTrainRate(action) {
+    trainPendingAction = action;
+    const prompt = $('#trainRatePrompt');
+    const actions = $('#trainActions');
+    const label = $('#trainRateLabel');
+    const stars = $('#trainRateStars');
+    if (label) label.textContent = action === 'watched'
+      ? 'How would you rate it?'
+      : 'How interested are you in seeing it?';
+    if (stars) stars.innerHTML = trainStarsInner(0);
+    if (prompt) prompt.classList.remove('hidden');
+    if (actions) actions.classList.add('hidden');
+  }
+  function hideTrainRate() {
+    trainPendingAction = null;
+    const prompt = $('#trainRatePrompt');
+    const actions = $('#trainActions');
+    if (prompt) prompt.classList.add('hidden');
+    if (actions && trainCurrent) actions.classList.remove('hidden');
+  }
+  function trainStarsInner(rating) {
+    let html = '';
+    for (let s = 1; s <= 5; s++) {
+      const on = s <= (rating || 0);
+      html += `<i class="${on ? 'fa-solid text-gold' : 'fa-regular text-slate-600'} fa-star cursor-pointer" data-rate="${s}" role="button" aria-label="${s} star${s === 1 ? '' : 's'}"></i>`;
+    }
+    return html;
+  }
+
+  // Apply a star rating for the pending "Watched" / "Interested" action, persist
+  // the signal (which reshapes recommendations), then advance.
+  function applyTrainRating(rating) {
+    if (!trainCurrent || !trainPendingAction) return;
+    const title = trainCurrent.title;
+    if (trainPendingAction === 'watched') upsertWatched(title, rating);
+    else upsertInterested(title, rating);
+    trainNext();
+  }
+
+  function wireTrainingFlow() {
+    const trainBtn = $('#recTrainBtn');
+    if (trainBtn) trainBtn.addEventListener('click', openTraining);
+    const closeBtn = $('#closeTrainBtn');
+    if (closeBtn) closeBtn.addEventListener('click', closeTraining);
+    const backdrop = $('#trainBackdrop');
+    if (backdrop) backdrop.addEventListener('click', closeTraining);
+
+    const notInterested = $('#trainNotInterested');
+    if (notInterested) notInterested.addEventListener('click', () => {
+      if (!trainCurrent) return;
+      markNotInterested(trainCurrent.title);
+      trainNext();
+    });
+    const watched = $('#trainWatched');
+    if (watched) watched.addEventListener('click', () => { if (trainCurrent) showTrainRate('watched'); });
+    const interested = $('#trainInterested');
+    if (interested) interested.addEventListener('click', () => { if (trainCurrent) showTrainRate('interested'); });
+    const addWatchlist = $('#trainAddWatchlist');
+    if (addWatchlist) addWatchlist.addEventListener('click', () => {
+      if (!trainCurrent) return;
+      addToWatchlist(trainCurrent.title);
+      trainNext();
+    });
+    const cancelRate = $('#trainRateCancel');
+    if (cancelRate) cancelRate.addEventListener('click', hideTrainRate);
+
+    // Star clicks within the training rate prompt (own handler so the global
+    // rating-stars handler that writes to the watched list never fires here).
+    const stars = $('#trainRateStars');
+    if (stars) stars.addEventListener('click', (e) => {
+      const star = e.target.closest && e.target.closest('i[data-rate]');
+      if (!star) return;
+      applyTrainRating(Number(star.dataset.rate) || 0);
     });
   }
 
@@ -2689,7 +3140,7 @@
     const refresh = $('#recRefreshBtn');
     if (prev) prev.addEventListener('click', () => scrollBy(-1));
     if (next) next.addEventListener('click', () => scrollBy(1));
-    if (refresh) refresh.addEventListener('click', () => renderRecommendations(true));
+    if (refresh) refresh.addEventListener('click', () => refreshRecommendations());
   }
 
   // ---- Phase 2: drag-and-drop / arrow ranking ballot ----
@@ -3140,6 +3591,7 @@
   function renderHistory() {
     renderHistoryNights();
     renderWatchedList();
+    renderWatchlistList();
   }
 
   // UI state for the history view: a search query (filters movie nights by a
@@ -3271,6 +3723,32 @@
         ${starSelector(w.title, w.rating)}
         <button class="remove-watched btn w-7 h-7 rounded bg-ink border border-line text-slate-400 hover:text-accent" title="Remove" data-title="${escapeHtml(w.title)}"><i class="fa-solid fa-trash"></i></button>`;
       row.querySelector('.remove-watched').addEventListener('click', () => removeWatched(w.title));
+      wrap.appendChild(row);
+    });
+  }
+
+  // Watchlist view — same row format as the ratings (watched) list. Each entry
+  // can be marked watched (moving it into ratings) or removed.
+  function renderWatchlistList() {
+    const wrap = $('#watchlistList');
+    if (!wrap) return;
+    const list = loadWatchlist().slice().sort((a, b) => (b.addedAt || 0) - (a.addedAt || 0));
+    const emptyEl = $('#watchlistEmpty');
+    if (emptyEl) emptyEl.classList.toggle('hidden', list.length > 0);
+    wrap.innerHTML = '';
+    list.forEach((w) => {
+      const meta = movieMeta(w.title);
+      const year = meta && meta.year ? ` <span class="text-slate-500">(${escapeHtml(String(meta.year))})</span>` : '';
+      const row = el('div', 'flex items-center gap-3 bg-panel2 border border-line rounded-lg px-3 py-2');
+      row.innerHTML = `
+        <span class="flex-1 text-sm font-medium truncate">${escapeHtml(w.title)}${year}</span>
+        <button class="watchlist-watched btn text-xs font-semibold px-2.5 py-1.5 rounded-lg bg-ink border border-line text-slate-300" title="Mark as watched" data-title="${escapeHtml(w.title)}"><i class="fa-regular fa-circle-check mr-1"></i>Watched</button>
+        <button class="remove-watchlist btn w-7 h-7 rounded bg-ink border border-line text-slate-400 hover:text-accent" title="Remove from watchlist" data-title="${escapeHtml(w.title)}"><i class="fa-solid fa-trash"></i></button>`;
+      row.querySelector('.watchlist-watched').addEventListener('click', () => {
+        upsertWatched(w.title, (findWatched(w.title) || {}).rating || 0);
+        removeFromWatchlist(w.title);
+      });
+      row.querySelector('.remove-watchlist').addEventListener('click', () => removeFromWatchlist(w.title));
       wrap.appendChild(row);
     });
   }
@@ -3834,6 +4312,7 @@
     // ---- Recommendation typeahead on the nominate input ----
     wireTypeahead();
     wireRecommendationNav();
+    wireTrainingFlow();
 
     // ---- History view toggle ----
     $('#historyBtn').addEventListener('click', () => showView(currentView === 'history' ? 'main' : 'history'));
