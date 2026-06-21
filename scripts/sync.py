@@ -486,6 +486,7 @@ def iter_new_movies(
     known_ids: Optional[set] = None,
     known_titles: Optional[set] = None,
     extra_ids: Optional[Iterable[int]] = None,
+    min_votecount: int = 50,
 ) -> Iterable[Dict[str, Any]]:
     """Yield newly-discovered movies one at a time (generator).
 
@@ -552,6 +553,12 @@ def iter_new_movies(
         except (RuntimeError, urllib.error.HTTPError) as err:
             print(f"\n  skip {movie_id}: {err}", file=sys.stderr)
             continue
+        try:
+            vote_count = int(detail.get("vote_count", 0))
+        except (TypeError, ValueError):
+            vote_count = 0
+        if vote_count < min_votecount:
+            continue
         omdb = fetch_omdb(omdb_key, detail.get("imdb_id", ""), pause=pause) if omdb_key else None
         movie = build_movie(detail, omdb)
         if not movie:
@@ -589,7 +596,7 @@ def default_ids_filename(today: Optional[datetime.date] = None) -> str:
     return today.strftime("movie_ids_%m_%d_%Y.json")
 
 
-def load_ids_file(path: str) -> Iterable[int]:
+def load_ids_file(path: str, min_popularity: float = 1.0) -> Iterable[int]:
     """Yield TMDB movie ids from a daily export file one at a time.
 
     The TMDB export (https://files.tmdb.org/p/exports/) is *newline-delimited*
@@ -613,9 +620,16 @@ def load_ids_file(path: str) -> Iterable[int]:
                     obj = json.loads(line)
                 except ValueError:
                     continue
-                movie_id = obj.get("id") if isinstance(obj, dict) else None
-                if isinstance(movie_id, int):
-                    yield movie_id
+                if isinstance(obj, dict):
+                    try:
+                        popularity = float(obj.get("popularity", 0.0))
+                    except (TypeError, ValueError):
+                        popularity = 0.0
+                    if popularity < min_popularity:
+                        continue
+                    movie_id = obj.get("id")
+                    if isinstance(movie_id, int):
+                        yield movie_id
     except OSError:
         return
 
@@ -658,6 +672,18 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         help="Max existing movies missing language/cast/director to re-fetch and "
         "enrich per run (0 = disable backfill). Older catalogue entries predate "
         "those fields; this fills the backlog incrementally. Default: 2000.",
+    )
+    parser.add_argument(
+        "--min-popularity",
+        type=float,
+        default=1.0,
+        help="Minimum popularity to filter movies from the TMDB daily export file. Default: 1.0.",
+    )
+    parser.add_argument(
+        "--min-votecount",
+        type=int,
+        default=50,
+        help="Minimum TMDB vote count to filter retrieved movies. Default: 50.",
     )
     return parser.parse_args(argv)
 
@@ -711,13 +737,13 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     if os.path.isfile(args.ids_file):
         print(f"Importing movie ids from {args.ids_file}.", file=sys.stderr)
-        ids: Optional[Iterable[int]] = load_ids_file(args.ids_file)
+        ids: Optional[Iterable[int]] = load_ids_file(args.ids_file, min_popularity=args.min_popularity)
     else:
         print(f"No ids imported from {args.ids_file} (missing or empty).", file=sys.stderr)
         ids = None
 
     new_movies = iter_new_movies(
-        args.pages, tmdb_key, omdb_key, args.pause, known_ids, known_titles, ids
+        args.pages, tmdb_key, omdb_key, args.pause, known_ids, known_titles, ids, min_votecount=args.min_votecount
     )
 
     # Serialize the catalogue as a single dense Protobuf binary (movies.pbf).
