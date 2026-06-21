@@ -68,11 +68,14 @@
 
     /* Draggable rank rows */
     .rank-row { transition: box-shadow .12s ease, opacity .12s ease; }
-    .rank-row.dragging { opacity: .85; box-shadow: 0 8px 24px rgba(0,0,0,.5); border-color: #7c5cff; }
+    .rank-row.dragging { opacity: .9; box-shadow: 0 8px 24px rgba(0,0,0,.5); border-color: #7c5cff; }
     .rank-row.drag-over { border-color: #7c5cff; }
-    /* Drag handle — `touch-action:none` lets us own touch gestures (no scroll). */
-    .drag-handle { touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
-    .drag-handle:active { cursor: grabbing; }
+    /* While a ballot row is reorderable, `touch-action:none` lets us own the
+       whole row's touch gestures so a vertical drag reorders (never scrolls). */
+    .rank-row.draggable { touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
+    .rank-row.draggable:active { cursor: grabbing; }
+    /* Drag handle — visual affordance; the entire row is grabbable. */
+    .drag-handle { cursor: grab; user-select: none; -webkit-user-select: none; }
 
     /* Winner celebration */
     @keyframes popIn { 0%{transform:scale(.8);opacity:0} 60%{transform:scale(1.04)} 100%{transform:scale(1);opacity:1} }
@@ -91,6 +94,18 @@
     /* Hide number input spinners */
     input[type=number]::-webkit-outer-spin-button,
     input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+    /* iOS/Chrome-mobile auto-zooms when focusing inputs smaller than 16px and
+       can then get "stuck" zoomed-in, blocking scroll. Force 16px on touch. */
+    @media (max-width: 640px) {
+      input, select, textarea { font-size: 16px !important; }
+    }
+
+    /* Avoid double-tap zoom getting stuck on tappable controls. */
+    button, a, .btn { touch-action: manipulation; }
+
+    /* Settings cog dropdown menu */
+    .menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 160px; z-index: 40; }
   </style>
 </head>
 
@@ -98,11 +113,13 @@
   <!-- ============================ HEADER ============================ -->
   <header class="sticky top-0 z-30 backdrop-blur bg-ink/70 border-b border-line">
     <div class="max-w-3xl mx-auto px-4 py-3 flex items-center gap-3">
-      <div class="text-2xl">🎬</div>
-      <div class="flex-1">
-        <h1 class="font-display text-2xl leading-none">MOVIE NIGHT</h1>
-        <p class="text-[11px] text-slate-400 -mt-0.5">P2P Ranked-Choice Voting</p>
-      </div>
+      <a href="#" id="homeLink" class="flex items-center gap-3 flex-1 min-w-0" title="Start a new room">
+        <div class="text-2xl">🎬</div>
+        <div class="min-w-0">
+          <h1 class="font-display text-2xl leading-none">MOVIE NIGHT</h1>
+          <p class="text-[11px] text-slate-400 -mt-0.5">P2P Ranked-Choice Voting</p>
+        </div>
+      </a>
       <!-- Live network status indicator -->
       <div id="netStatus" class="flex items-center gap-2 text-xs px-3 py-1.5 rounded-full bg-panel2 border border-line">
         <span id="netDot" class="dot pulse" style="background:#ffce4d"></span>
@@ -130,7 +147,26 @@
 
       <!-- Editable display name. Defaults to a fun nickname placeholder. -->
       <div class="mt-4">
-        <label for="nameInput" class="text-[11px] uppercase tracking-wider text-slate-400">Your name</label>
+        <div class="flex items-center justify-between">
+          <label for="nameInput" class="text-[11px] uppercase tracking-wider text-slate-400">Your name</label>
+          <!-- Settings cog (shown once a name has been chosen). -->
+          <div id="settingsWrap" class="hidden relative">
+            <button id="settingsBtn" type="button" aria-haspopup="true" aria-expanded="false"
+                    class="btn w-8 h-8 rounded-lg bg-panel2 border border-line flex items-center justify-center text-slate-300"
+                    title="Settings">⚙️</button>
+            <div id="settingsMenu" class="menu hidden card p-1">
+              <button id="changeNameBtn" type="button"
+                      class="w-full text-left text-sm px-3 py-2 rounded-lg hover:bg-panel2">Change name</button>
+            </div>
+          </div>
+        </div>
+
+        <!-- Display view: shown after the name has been set once. -->
+        <div id="nameDisplay" class="hidden mt-1">
+          <div id="nameDisplayValue" class="font-semibold text-lg truncate">…</div>
+        </div>
+
+        <!-- Edit view: the input + Save button. -->
         <form id="nameForm" class="flex gap-2 mt-1">
           <input id="nameInput" maxlength="24" autocomplete="off"
                  placeholder="Pick a name…"
@@ -239,6 +275,19 @@
     Serverless P2P over WebRTC · No data leaves your devices except signaling.
   </footer>
 
+  <!-- ===================== START-VOTING CONFIRM MODAL ===================== -->
+  <div id="startVoteModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div id="startVoteBackdrop" class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
+    <div class="card relative z-10 max-w-sm w-full p-6 text-center space-y-4">
+      <h3 class="font-display text-2xl">START VOTING?</h3>
+      <p class="text-sm text-slate-300">This will prevent more options from being added. Are you ready to begin voting?</p>
+      <div class="flex gap-2">
+        <button id="cancelStartVoteBtn" class="btn flex-1 bg-panel2 border border-line text-sm font-semibold px-4 py-2.5 rounded-lg">Cancel</button>
+        <button id="confirmStartVoteBtn" class="btn btn-primary flex-1 text-white text-sm font-semibold px-4 py-2.5 rounded-lg">Start</button>
+      </div>
+    </div>
+  </div>
+
   <script>
   /* ======================================================================
    *  MOVIE NIGHT — single-file P2P ranked-choice voting app
@@ -303,17 +352,33 @@
     return String(raw || '').replace(/\s+/g, ' ').trim().slice(0, MAX_NAME_LEN);
   }
 
-  // ---- Session-storage persistence of the participant's chosen name ----
+  // ---- Persistence of the participant's chosen name ----
+  // Use localStorage (not sessionStorage) so the name survives a full page
+  // reload / browser restart — sessionStorage is unreliable across mobile
+  // tab restores and new tabs.
   const NAME_STORAGE_KEY = 'movieNightName';
   function loadSavedName() {
-    try { return cleanName(sessionStorage.getItem(NAME_STORAGE_KEY) || ''); }
+    try { return cleanName(localStorage.getItem(NAME_STORAGE_KEY) || ''); }
     catch (e) { return ''; }
   }
   function saveName(name) {
     try {
-      if (name) sessionStorage.setItem(NAME_STORAGE_KEY, name);
-      else sessionStorage.removeItem(NAME_STORAGE_KEY);
+      if (name) localStorage.setItem(NAME_STORAGE_KEY, name);
+      else localStorage.removeItem(NAME_STORAGE_KEY);
     } catch (e) { /* storage may be unavailable */ }
+  }
+
+  // ---- Host-resume persistence (per tab) so a host can refresh the page ----
+  // The host's URL carries ?room=, so a naive reload would turn the host into
+  // an orphaned guest looking for a host that no longer exists. We remember the
+  // room we host in sessionStorage and resume hosting it after a reload.
+  const HOST_ROOM_KEY = 'movieNightHostRoom';
+  function rememberHostRoom(id) {
+    try { sessionStorage.setItem(HOST_ROOM_KEY, id); } catch (e) {}
+  }
+  function recallHostRoom() {
+    try { return sessionStorage.getItem(HOST_ROOM_KEY) || ''; }
+    catch (e) { return ''; }
   }
 
   // ------------------------- Small DOM helpers --------------------------
@@ -330,6 +395,7 @@
   let myName = '…';                // assigned display name (e.g. "Host", "Peer 2")
   const connections = new Map();   // peerId -> DataConnection (open)
   let hasVotedLocally = false;     // guard so we don't re-render our ballot away
+  let editingName = false;         // true while the inline name editor is shown
 
   /* The authoritative state. On the host this is the real thing; on guests
    * it is the latest snapshot received from the host. */
@@ -347,14 +413,21 @@
   function boot() {
     const params = new URLSearchParams(location.search);
     const urlRoom = params.get('room');
+    const hostRoom = recallHostRoom();
 
-    if (urlRoom) {
+    if (urlRoom && urlRoom.toUpperCase() === hostRoom) {
+      // We were hosting this room and just reloaded — resume as host.
+      isHost = true;
+      roomId = hostRoom;
+      startHost();
+    } else if (urlRoom) {
       isHost = false;
       roomId = urlRoom.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, ROOM_ID_LEN);
       startGuest();
     } else {
       isHost = true;
       roomId = randomRoomId();
+      rememberHostRoom(roomId);
       // Smoothly reflect the room in the URL without reloading.
       const url = `${location.pathname}?room=${roomId}`;
       history.pushState({ room: roomId }, '', url);
@@ -377,6 +450,7 @@
   // ======================================================================
   function startHost() {
     setStatus('warn', 'Starting host…');
+    try { if (peer) peer.destroy(); } catch (e) {}
     peer = new Peer(`room-${roomId}-host`, { debug: 1 });
 
     peer.on('open', (id) => {
@@ -623,6 +697,15 @@
         break;
       }
 
+      case 'removeNomination': {
+        if (state.phase !== 'lobby') return;
+        // A participant may only remove a candidate they nominated themselves.
+        const movie = state.movies.find((m) => m.id === action.movieId);
+        if (!movie || movie.by !== fromId) return;
+        state.movies = state.movies.filter((m) => m.id !== action.movieId);
+        break;
+      }
+
       case 'startVoting': {
         if (fromId !== myId) return;                  // host-only
         if (state.phase !== 'lobby') return;
@@ -793,13 +876,30 @@
     renderResults();
   }
 
-  // Keep the name input's placeholder in sync with our current display name.
+  // Keep the name input's placeholder in sync, and toggle between the inline
+  // editor and the read-only display (with settings cog) once a name is set.
   function renderNameField() {
     const input = $('#nameInput');
-    if (!input || document.activeElement === input) return;
     const transient = ['', '…', 'Connecting…'];
     const current = !transient.includes(myName) ? myName : loadSavedName();
-    input.placeholder = current ? current : 'Pick a name…';
+
+    if (input && document.activeElement !== input) {
+      input.placeholder = current ? current : 'Pick a name…';
+    }
+
+    // A name is considered "set" once the user has explicitly saved one.
+    const nameSet = !!loadSavedName();
+    const showEditor = editingName || !nameSet;
+
+    const form = $('#nameForm');
+    const display = $('#nameDisplay');
+    const settings = $('#settingsWrap');
+    if (form) form.classList.toggle('hidden', !showEditor);
+    if (display) display.classList.toggle('hidden', showEditor);
+    if (settings) settings.classList.toggle('hidden', !nameSet);
+
+    const value = $('#nameDisplayValue');
+    if (value) value.textContent = current || '…';
   }
 
   function renderPeers() {
@@ -843,25 +943,36 @@
     list.innerHTML = '';
     $('#emptyMovies').classList.toggle('hidden', state.movies.length > 0);
 
+    const canEdit = state.phase === 'lobby';
     state.movies.forEach((m, i) => {
       const li = el('li', 'flex items-center gap-3 bg-panel2 border border-line rounded-lg px-3 py-2');
       const who = (state.peers.find((p) => p.id === m.by) || {}).name || 'Someone';
+      const mineMovie = m.by === myId;
       li.innerHTML = `
         <span class="font-display text-xl text-slate-500 w-6 text-center">${i + 1}</span>
         <span class="flex-1 text-sm font-medium truncate">${escapeHtml(m.title)}</span>
-        <span class="text-[10px] text-slate-500">by ${escapeHtml(who)}</span>`;
+        <span class="text-[10px] text-slate-500">by ${escapeHtml(who)}</span>
+        ${mineMovie && canEdit
+          ? `<button class="remove-movie btn w-7 h-7 rounded bg-ink border border-line text-sm leading-none text-slate-400 hover:text-accent" aria-label="Remove movie" title="Remove">🗑️</button>`
+          : ''}`;
+      if (mineMovie && canEdit) {
+        li.querySelector('.remove-movie').onclick = () => dispatch({ type: 'removeNomination', movieId: m.id });
+      }
       list.appendChild(li);
     });
 
-    // Update the per-user nomination hint.
+    // Update the per-user nomination hint and Add-bar visibility.
     const mine = state.movies.filter((m) => m.by === myId).length;
     const left = MAX_NOMINATIONS - mine;
+    const form = $('#nominateForm');
     const input = $('#movieInput');
     const btn = $('#addMovieBtn');
     const disabled = left <= 0 || state.phase !== 'lobby';
     input.disabled = disabled;
     btn.disabled = disabled;
     btn.classList.toggle('opacity-40', disabled);
+    // Hide the whole Add bar once this user has used all their nominations.
+    form.classList.toggle('hidden', left <= 0 && state.phase === 'lobby');
     $('#nominateMsg').textContent = left > 0
       ? `You can add ${left} more movie${left === 1 ? '' : 's'}.`
       : 'You have used all of your nominations.';
@@ -888,26 +999,30 @@
     $('#voteMsg').textContent = hasVotedLocally ? '✅ Vote submitted! Waiting for others…' : '';
 
     ul.innerHTML = '';
+    const lastIdx = ballotOrder.length - 1;
     ballotOrder.forEach((id, idx) => {
       const movie = state.movies.find((m) => m.id === id);
       if (!movie) return;
       const li = el('li', 'rank-row flex items-center gap-2 bg-panel2 border border-line rounded-lg px-3 py-2.5');
       li.dataset.id = id;
+      const isTop = idx === 0;
+      const isBottom = idx === lastIdx;
       li.innerHTML = `
         <span class="rank-num font-display text-2xl text-accent2 w-7 text-center">${idx + 1}</span>
         <span class="flex-1 text-sm font-medium truncate">${escapeHtml(movie.title)}</span>
         <span class="flex flex-col gap-1">
-          <button data-dir="up" class="up btn w-7 h-7 rounded bg-ink border border-line text-xs leading-none" aria-label="Move up">▲</button>
-          <button data-dir="down" class="down btn w-7 h-7 rounded bg-ink border border-line text-xs leading-none" aria-label="Move down">▼</button>
+          <button data-dir="up" class="up btn w-7 h-7 rounded bg-ink border border-line text-xs leading-none ${isTop ? 'invisible' : ''}" aria-label="Move up" ${isTop ? 'tabindex="-1"' : ''}>▲</button>
+          <button data-dir="down" class="down btn w-7 h-7 rounded bg-ink border border-line text-xs leading-none ${isBottom ? 'invisible' : ''}" aria-label="Move down" ${isBottom ? 'tabindex="-1"' : ''}>▼</button>
         </span>
         <span class="drag-handle px-1 text-lg text-slate-500 select-none" aria-label="Drag to reorder" title="Drag to reorder">⠿</span>`;
 
       if (!hasVotedLocally) {
-        // Arrow controls.
-        li.querySelector('.up').onclick = () => moveBallot(idx, -1);
-        li.querySelector('.down').onclick = () => moveBallot(idx, 1);
-        // Pointer-based drag (works for mouse, touch, and pen).
-        attachPointerDrag(li, li.querySelector('.drag-handle'));
+        // Arrow controls (edge arrows are hidden but guard anyway).
+        if (!isTop) li.querySelector('.up').onclick = () => moveBallot(idx, -1);
+        if (!isBottom) li.querySelector('.down').onclick = () => moveBallot(idx, 1);
+        // Pointer-based drag on the WHOLE row (works for mouse, touch, and pen).
+        li.classList.add('draggable');
+        attachPointerDrag(li);
       } else {
         li.querySelector('.drag-handle').classList.add('opacity-30');
       }
@@ -944,24 +1059,39 @@
     if (ballotDragging) e.preventDefault();
   }, { passive: false });
 
-  // Touch/mouse/pen reordering via Pointer Events (fixes mobile drag).
-  function attachPointerDrag(li, handle) {
-    if (!handle) return;
+  // Touch/mouse/pen reordering via Pointer Events. The ENTIRE row is grabbable
+  // (like Strawpoll) — we ignore presses that start on the arrow buttons so they
+  // still work as taps. `touch-action:none` on `.draggable` rows means a vertical
+  // drag reorders instead of scrolling the page.
+  function attachPointerDrag(li) {
     let dragging = false;
     let activePointer = null;
+    let startX = 0;
+    let startY = 0;
+    let started = false;            // becomes true once movement exceeds threshold
 
-    handle.addEventListener('pointerdown', (e) => {
+    li.addEventListener('pointerdown', (e) => {
       if (hasVotedLocally) return;
-      e.preventDefault();
+      if (e.button != null && e.button !== 0) return;   // primary button only
+      // Let the arrow buttons receive their own taps.
+      if (e.target.closest('button')) return;
       dragging = true;
-      ballotDragging = true;
+      started = false;
       activePointer = e.pointerId;
-      li.classList.add('dragging');
-      try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+      startX = e.clientX;
+      startY = e.clientY;
+      try { li.setPointerCapture(e.pointerId); } catch (_) {}
     });
 
-    handle.addEventListener('pointermove', (e) => {
+    li.addEventListener('pointermove', (e) => {
       if (!dragging || e.pointerId !== activePointer) return;
+      // Begin the drag only after a small threshold so taps aren't hijacked.
+      if (!started) {
+        if (Math.abs(e.clientY - startY) < 6 && Math.abs(e.clientX - startX) < 6) return;
+        started = true;
+        ballotDragging = true;
+        li.classList.add('dragging');
+      }
       e.preventDefault();
       const ul = $('#ballot');
       const after = getDragAfterElement(ul, e.clientY);
@@ -976,13 +1106,16 @@
       ballotDragging = false;
       activePointer = null;
       li.classList.remove('dragging');
-      try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
-      // Rebuild the canonical order from the final DOM order.
-      ballotOrder = [...$('#ballot').querySelectorAll('.rank-row')].map((n) => n.dataset.id);
-      renderBallotIfNeeded();
+      try { li.releasePointerCapture(e.pointerId); } catch (_) {}
+      if (started) {
+        // Rebuild the canonical order from the final DOM order.
+        ballotOrder = [...$('#ballot').querySelectorAll('.rank-row')].map((n) => n.dataset.id);
+        renderBallotIfNeeded();
+      }
+      started = false;
     };
-    handle.addEventListener('pointerup', end);
-    handle.addEventListener('pointercancel', end);
+    li.addEventListener('pointerup', end);
+    li.addEventListener('pointercancel', end);
   }
 
   function moveBallot(idx, delta) {
@@ -1136,7 +1269,14 @@
         setTimeout(() => { if (connections.size === 0) connectToHost(); }, 1500);
       }
     } else if (t === 'unavailable-id') {
-      setStatus('err', 'Room id already hosting elsewhere');
+      // After a host refresh the old PeerJS id can linger on the signaling
+      // server for a few seconds. Retry so the host can reclaim its room.
+      if (isHost) {
+        setStatus('warn', 'Reclaiming room…');
+        setTimeout(() => { if (connections.size === 0) startHost(); }, 2000);
+      } else {
+        setStatus('err', 'Room id already hosting elsewhere');
+      }
     } else if (t === 'network' || t === 'server-error' || t === 'socket-error') {
       setStatus('err', 'Signaling unavailable');
     } else {
@@ -1147,6 +1287,28 @@
   // ======================================================================
   //  UI EVENT WIRING
   // ======================================================================
+  // ----------------------- Start-voting modal helpers -------------------
+  function openStartVoteModal() {
+    if (!(isHost && state.phase === 'lobby')) return;
+    if (state.movies.length < 2) return;
+    $('#startVoteModal').classList.remove('hidden');
+  }
+  function closeStartVoteModal() {
+    $('#startVoteModal').classList.add('hidden');
+  }
+
+  // ----------------------- Settings cog menu helpers --------------------
+  function toggleSettingsMenu() {
+    const menu = $('#settingsMenu');
+    const open = menu.classList.toggle('hidden');
+    $('#settingsBtn').setAttribute('aria-expanded', String(!open));
+  }
+  function closeSettingsMenu() {
+    $('#settingsMenu').classList.add('hidden');
+    $('#settingsBtn').setAttribute('aria-expanded', 'false');
+  }
+
+  // ----------------------- Wire up all interactive controls -------------
   function wireUiEvents() {
     // Nominate a movie.
     $('#nominateForm').addEventListener('submit', (e) => {
@@ -1158,10 +1320,40 @@
       input.value = '';
     });
 
-    // Host: lock nominations & start voting.
-    $('#lockBtn').addEventListener('click', () => dispatch({ type: 'startVoting' }));
+    // Clicking the logo / "Movie Night" starts a fresh room (home page).
+    $('#homeLink').addEventListener('click', (e) => {
+      e.preventDefault();
+      try { sessionStorage.removeItem(HOST_ROOM_KEY); } catch (err) {}
+      location.href = location.pathname;
+    });
 
-    // Set / change my display name (persisted in session storage).
+    // Host: lock nominations & start voting — confirm via modal first.
+    $('#lockBtn').addEventListener('click', () => openStartVoteModal());
+    $('#startVoteBackdrop').addEventListener('click', closeStartVoteModal);
+    $('#cancelStartVoteBtn').addEventListener('click', closeStartVoteModal);
+    $('#confirmStartVoteBtn').addEventListener('click', () => {
+      closeStartVoteModal();
+      dispatch({ type: 'startVoting' });
+    });
+
+    // Settings cog menu (open/close + "Change name").
+    $('#settingsBtn').addEventListener('click', (e) => {
+      e.stopPropagation();
+      toggleSettingsMenu();
+    });
+    $('#changeNameBtn').addEventListener('click', () => {
+      closeSettingsMenu();
+      editingName = true;
+      renderNameField();
+      const input = $('#nameInput');
+      if (input) { input.value = ''; input.focus(); }
+    });
+    // Click-away closes the settings menu.
+    document.addEventListener('click', (e) => {
+      if (!$('#settingsWrap').contains(e.target)) closeSettingsMenu();
+    });
+
+    // Set / change my display name (persisted in local storage).
     $('#nameForm').addEventListener('submit', (e) => {
       e.preventDefault();
       const input = $('#nameInput');
@@ -1173,6 +1365,7 @@
       dispatch({ type: 'setName', name });
       input.value = '';
       input.blur();
+      editingName = false;                 // collapse back to the display view
       const msg = $('#nameMsg');
       msg.textContent = '✅ Name saved!';
       setTimeout(() => { msg.textContent = ''; }, 1800);
