@@ -323,7 +323,7 @@
     <section id="phaseRecommend" class="hidden card p-4 space-y-3">
       <div class="flex items-center justify-between">
         <h2 class="font-display text-2xl">RECOMMENDED</h2>
-        <span class="text-xs text-slate-400">New &amp; picks for you</span>
+        <span class="rec-subtitle text-xs text-slate-400">Popular &amp; new</span>
       </div>
       <div class="relative">
         <button id="recPrev" type="button" class="rec-nav rec-prev" aria-label="Scroll recommendations left">
@@ -480,7 +480,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.3</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.4</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -1787,23 +1787,51 @@
   // ======================================================================
   //  RECOMMENDATION ENGINE  (modular — swap `scoreCandidate` to change logic)
   // ======================================================================
-  // Surfaces a carousel of suggestions above the NOMINATE section. It blends two
-  // intents: brand-new releases and personalised unwatched picks derived from the
-  // viewer's saved ratings. The whole thing is a progressive enhancement: with no
-  // catalogue (movies.json) or no ratings it gracefully falls back to popular /
-  // recent films.
+  // ======================================================================
+  //  LOCAL ML RECOMMENDATION ENGINE
+  // ======================================================================
+  // Surfaces a carousel of suggestions above the NOMINATE section.
   //
-  // The scoring is intentionally isolated so it is easy to replace later:
-  //   • REC_CONFIG          — tunable weights / sizes in one place.
-  //   • buildTasteProfile() — turns the watched list into genre affinities.
-  //   • scoreCandidate()    — the swappable ranking function (pure given inputs).
-  //   • blendRecommendations() — guarantees a mix of "new" and personalised picks.
-  // Replace any one of these without touching the rendering code below.
+  // Two modes:
+  //   Cold-start  — no watched/rated/nominated history → top popular+new movies
+  //                 ranked by critic quality alone (fast + always useful).
+  //   Personalised — content-based filtering that builds a multi-signal taste
+  //                 profile from the viewer's history and scores every catalogue
+  //                 entry by cosine-style similarity to that profile.
+  //
+  // Signals used when data is available:
+  //   • Genre affinity  — weighted by star rating; penalises disliked genres.
+  //   • Actor affinity  — top cast overlap with liked films (cast[] in DB).
+  //   • Director affinity — favourite directors get a strong boost.
+  //   • Keyword affinity — TF-IDF-style overlap on movie descriptions.
+  //   • Nomination history — past self-nominations treated as mild "liked" signal.
+  //   • Quality score   — critic consensus (IMDb / RT / Letterboxd), always applied.
+  //   • Recency         — recent films guaranteed a share of the carousel.
+  //
+  // The scoring is intentionally isolated so each piece is easy to tune:
+  //   REC_CONFIG        — weights/sizes in one place.
+  //   buildTasteProfile() — aggregates all user signals into affinity maps.
+  //   scoreCandidate()  — pure function; returns a single comparable score.
+  //   blendRecommendations() — interleaves "new" films with top personal picks.
+
   const REC_CONFIG = {
-    maxResults: 18,                                  // cards shown in the carousel
-    newSinceYear: new Date().getFullYear() - 2,      // a film is "new" if year >= this
-    newFraction: 0.4,                                // target share of recent releases
-    weights: { genre: 1.0, quality: 1.2 },
+    maxResults:  18,
+    newSinceYear: new Date().getFullYear() - 2,
+    newFraction: 0.35,
+    weights: {
+      genre:    1.2,
+      actor:    1.0,
+      director: 1.5,
+      keyword:  0.8,
+      quality:  1.0,
+    },
+    // Minimum number of rated/nominated titles needed before switching to
+    // personalised mode (below this we use cold-start).
+    personaliseThreshold: 3,
+    // Maximum keywords extracted per movie description.
+    maxKeywords: 30,
+    // Minimum word length to keep as a keyword.
+    minWordLen: 4,
   };
 
   const isNewMovie = (m) => !!(m && m.year && m.year >= REC_CONFIG.newSinceYear);
@@ -1811,25 +1839,31 @@
   const movieGenres = (m) =>
     (m && m.genres && m.genres.length ? m.genres : (m && m.primaryGenre ? [m.primaryGenre] : []));
 
-  // Build a lightweight taste profile from the viewer's watched + rated movies.
-  // Each genre accumulates weight from the films it appears in: rated titles push
-  // their genres up (rating > 2.5) or down (rating < 2.5), while merely-watched
-  // titles contribute a small positive signal. Returns genre affinity weights.
-  function buildTasteProfile() {
-    const genreWeights = new Map();
-    const watched = loadWatched();
-    let rated = 0;
-    watched.forEach((w) => {
-      const meta = movieMeta(w.title);
-      if (!meta) return;
-      const r = w.rating || 0;
-      const weight = r ? (r - 2.5) : 0.5;   // 0 = unrated → mild positive
-      if (r) rated += 1;
-      movieGenres(meta).forEach((g) => genreWeights.set(g, (genreWeights.get(g) || 0) + weight));
-    });
-    return { genreWeights, watchedCount: watched.length, ratedCount: rated };
+  // ---------- keyword extraction ----------
+  // Common English stop-words to strip before building the keyword profile.
+  const STOP_WORDS = new Set([
+    'a','an','and','are','as','at','be','been','but','by','do','for','from',
+    'had','has','have','he','her','him','his','how','if','in','into','is',
+    'it','its','just','me','must','my','no','not','of','on','one','only',
+    'or','our','out','she','so','that','the','their','them','then','there',
+    'they','this','to','up','us','was','we','were','what','when','where',
+    'which','who','will','with','you','your','after','before','about','also',
+    'more','than','when','make','made','find','finds','gets','gets','back',
+    'over','must','life','two','three','four','five','story','world','takes',
+    'take','while','being','becomes','become','young','old','new','first',
+    'last','time','soon','long','away','each','through','around',
+  ]);
+
+  function extractKeywords(text) {
+    if (!text) return [];
+    return text.toLowerCase()
+      .replace(/[^a-z\s]/g, ' ')
+      .split(/\s+/)
+      .filter((w) => w.length >= REC_CONFIG.minWordLen && !STOP_WORDS.has(w))
+      .slice(0, REC_CONFIG.maxKeywords);
   }
 
+  // ---------- quality score ----------
   // Quality signal in roughly 0..1, averaged across whichever ratings exist.
   function qualityScore(m) {
     const r = (m && m.ratings) || {};
@@ -1840,24 +1874,102 @@
     return n ? sum / n : 0.5;
   }
 
-  // The swappable ranking function. Given a candidate movie and the viewer's taste
-  // profile, return a single comparable "how much they'll enjoy it" score. It is
-  // deliberately year-agnostic: recency is handled separately by the blend step so
-  // older gems that match the viewer's taste are not unfairly buried.
-  function scoreCandidate(m, profile) {
-    const w = REC_CONFIG.weights;
-    const genreScore = movieGenres(m).reduce((acc, g) => acc + (profile.genreWeights.get(g) || 0), 0);
-    return w.genre * genreScore + w.quality * qualityScore(m);
+  // ---------- taste profile ----------
+  // Build a multi-signal profile from watched+rated movies and past nominations.
+  // Each signal is a Map<feature, weight> where positive = liked, negative = disliked.
+  // Returns { genreWeights, actorWeights, directorWeights, keywordWeights,
+  //           watchedCount, ratedCount, hasSignal }
+  function buildTasteProfile() {
+    const genreWeights    = new Map();
+    const actorWeights    = new Map();
+    const directorWeights = new Map();
+    const keywordWeights  = new Map();
+
+    function applySignals(meta, strength) {
+      // Genres
+      movieGenres(meta).forEach((g) =>
+        genreWeights.set(g, (genreWeights.get(g) || 0) + strength));
+      // Actors (cast[] — present in DB entries fetched with credits)
+      if (Array.isArray(meta.cast)) {
+        meta.cast.forEach((a) =>
+          actorWeights.set(a, (actorWeights.get(a) || 0) + strength));
+      }
+      // Director
+      const dirs = Array.isArray(meta.director) ? meta.director
+                 : (meta.director ? [meta.director] : []);
+      dirs.forEach((d) =>
+        directorWeights.set(d, (directorWeights.get(d) || 0) + strength * 1.2));
+      // Description keywords
+      extractKeywords(meta.description).forEach((kw) =>
+        keywordWeights.set(kw, (keywordWeights.get(kw) || 0) + strength * 0.5));
+    }
+
+    const watched = loadWatched();
+    let rated = 0;
+    watched.forEach((w) => {
+      const meta = movieMeta(w.title);
+      if (!meta) return;
+      const r = w.rating || 0;
+      // Rated: signal proportional to how far from neutral (2.5).
+      // Unrated (watched but not scored): mild positive.
+      const strength = r ? (r - 2.5) : 0.5;
+      if (r) rated += 1;
+      applySignals(meta, strength);
+    });
+
+    // Past nomination history: movies the viewer chose to nominate are a mild
+    // "interested in" signal even without an explicit rating.
+    loadHistory().forEach((night) => {
+      if (!Array.isArray(night.movies)) return;
+      night.movies.forEach((entry) => {
+        // Only count titles nominated by this device (entries without a peer
+        // name, or where the name matches myName at recording time). As a safe
+        // heuristic, treat ALL nominations in stored history as self-nominated
+        // since the history is per-browser.
+        const meta = movieMeta(entry.title);
+        if (!meta) return;
+        // Slight positive signal, weaker than an explicit rating.
+        applySignals(meta, 0.3);
+      });
+    });
+
+    const hasSignal = rated + watched.length + loadHistory().length >= REC_CONFIG.personaliseThreshold;
+    return { genreWeights, actorWeights, directorWeights, keywordWeights,
+             watchedCount: watched.length, ratedCount: rated, hasSignal };
   }
 
-  // Blend the two recommendation intents into one carousel order: brand-new
-  // releases and personalised picks of any vintage. We interleave a "new" bucket
-  // (up to `newFraction` of the slots) with the overall top picks so the viewer
-  // always sees a mix of fresh releases and unwatched films matched to their taste.
+  // ---------- candidate scoring ----------
+  // Pure function: given a catalogue entry and a taste profile, return a score.
+  // Year-agnostic — recency is handled by the blend step so vintage classics that
+  // perfectly match the viewer's taste are never unfairly buried.
+  function scoreCandidate(m, profile) {
+    const w   = REC_CONFIG.weights;
+    const gen = movieGenres(m).reduce((s, g) => s + (profile.genreWeights.get(g) || 0), 0);
+    const act = Array.isArray(m.cast)
+      ? m.cast.reduce((s, a) => s + (profile.actorWeights.get(a) || 0), 0)
+      : 0;
+    const dirs = Array.isArray(m.director) ? m.director
+               : (m.director ? [m.director] : []);
+    const dir  = dirs.reduce((s, d) => s + (profile.directorWeights.get(d) || 0), 0);
+    const kws  = extractKeywords(m.description);
+    const kw   = kws.reduce((s, k) => s + (profile.keywordWeights.get(k) || 0), 0);
+    const qual = qualityScore(m);
+    return w.genre * gen + w.actor * act + w.director * dir + w.keyword * kw + w.quality * qual;
+  }
+
+  // Cold-start score: quality + small recency boost; no personalisation.
+  function coldStartScore(m) {
+    const recency = isNewMovie(m) ? 0.15 : 0;
+    return qualityScore(m) + recency;
+  }
+
+  // ---------- blend ----------
+  // Interleave "new" films with the overall top picks so the viewer always sees
+  // a mix of fresh releases and unwatched films matched to their taste.
   function blendRecommendations(ranked, max) {
-    const newTarget = Math.round(max * REC_CONFIG.newFraction);
-    const newRanked = ranked.filter((r) => r.isNew);
-    const out = [];
+    const newTarget  = Math.round(max * REC_CONFIG.newFraction);
+    const newRanked  = ranked.filter((r) => r.isNew);
+    const out  = [];
     const used = new Set();
     let ni = 0, pi = 0;
     while (out.length < max && (ni < newRanked.length || pi < ranked.length)) {
@@ -1878,19 +1990,22 @@
     return out;
   }
 
+  // ---------- main entry point ----------
   // Score the whole catalogue (excluding watched + already-nominated titles) and
-  // return a blended, ranked list of { movie, score, isNew } recommendation rows.
+  // return a blended, ranked list of { movie, score, isNew, personalised } rows.
   function computeRecommendations() {
     if (!MOVIE_DB.length) return [];
-    const profile = buildTasteProfile();
-    const watchedSet = new Set(loadWatched().map((w) => normTitle(w.title)));
+    const profile      = buildTasteProfile();
+    const personalised = profile.hasSignal;
+    const watchedSet   = new Set(loadWatched().map((w) => normTitle(w.title)));
     const nominatedSet = new Set(state.movies.map((m) => normTitle(m.title)));
-    const candidates = [];
+    const candidates   = [];
     for (const m of MOVIE_DB) {
-      if (!m || !m.title || !m.art) continue;             // need art for a card
+      if (!m || !m.title || !m.art) continue;
       const nt = normTitle(m.title);
       if (watchedSet.has(nt) || nominatedSet.has(nt)) continue;
-      candidates.push({ movie: m, score: scoreCandidate(m, profile), isNew: isNewMovie(m) });
+      const score = personalised ? scoreCandidate(m, profile) : coldStartScore(m);
+      candidates.push({ movie: m, score, isNew: isNewMovie(m), personalised });
     }
     candidates.sort((a, b) => b.score - a.score);
     return blendRecommendations(candidates, REC_CONFIG.maxResults);
@@ -1898,16 +2013,20 @@
 
   // Recommendations only change when the catalogue, the watched/rated list or the
   // current nominations change, so memoise to avoid rescoring on every render.
-  let recCache = { sig: null, list: [] };
+  let recCache = { sig: null, list: [], personalised: false };
   function recSignature() {
-    const w = loadWatched().map((x) => normTitle(x.title) + ':' + (x.rating || 0)).join('|');
+    const w    = loadWatched().map((x) => normTitle(x.title) + ':' + (x.rating || 0)).join('|');
     const noms = state.movies.map((m) => normTitle(m.title)).join('|');
-    return MOVIE_DB.length + '#' + w + '#' + noms;
+    const hist = loadHistory().length;
+    return MOVIE_DB.length + '#' + w + '#' + noms + '#' + hist;
   }
   function getRecommendations() {
     const sig = recSignature();
-    if (recCache.sig !== sig) recCache = { sig, list: computeRecommendations() };
-    return recCache.list;
+    if (recCache.sig !== sig) {
+      const list = computeRecommendations();
+      recCache = { sig, list, personalised: list.length > 0 && list[0].personalised };
+    }
+    return recCache;
   }
 
   // ---- Recommendation carousel rendering ----
@@ -1939,13 +2058,17 @@
     const section = $('#phaseRecommend');
     const track = $('#recTrack');
     const empty = $('#recEmpty');
+    const subtitle = section && section.querySelector('.rec-subtitle');
     if (!section || !track) return;
 
     // Only relevant while nominating; never show without a catalogue to draw from.
     if (state.phase !== 'lobby' || !MOVIE_DB.length) { section.classList.add('hidden'); return; }
 
-    const recs = getRecommendations();
+    const { list: recs, personalised } = getRecommendations();
     section.classList.remove('hidden');
+
+    // Update the subtitle to reflect the recommendation mode.
+    if (subtitle) subtitle.textContent = personalised ? 'Picks for you' : 'Popular & new';
 
     if (!recs.length) {
       track.innerHTML = '';

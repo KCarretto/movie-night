@@ -194,6 +194,10 @@ def build_movie(
 ) -> Optional[Dict[str, Any]]:
     """Map a TMDB *details* payload (+ optional OMDb) to our schema.
 
+    The *detail* dict may include an ``append_to_response=credits`` payload
+    under the key ``"credits"`` so that cast and director names are embedded
+    without an extra API round-trip.
+
     Returns ``None`` for records too incomplete to be useful (e.g. no title or
     no genre), so callers can skip them.
     """
@@ -223,6 +227,26 @@ def build_movie(
     tmdb_id = detail.get("id")
     if isinstance(tmdb_id, int):
         movie["tmdb_id"] = tmdb_id
+
+    # Extract cast (top 5 by order) and director(s) from the embedded credits
+    # payload — present when the detail was fetched with append_to_response=credits.
+    credits = detail.get("credits") or {}
+    cast_entries = credits.get("cast") or []
+    crew_entries = credits.get("crew") or []
+    cast = [
+        str(c["name"])
+        for c in cast_entries
+        if c.get("name") and c.get("order", 999) < 5
+    ][:5]
+    directors = [
+        str(c["name"])
+        for c in crew_entries
+        if c.get("name") and c.get("job") == "Director"
+    ]
+    if cast:
+        movie["cast"] = cast
+    if directors:
+        movie["director"] = directors
     return movie
 
 
@@ -407,7 +431,10 @@ def generate(
     for movie_id, _title in pending:
         progress.update()
         try:
-            detail = client.get(f"movie/{movie_id}", {"language": "en-US"})
+            detail = client.get(
+                f"movie/{movie_id}",
+                {"language": "en-US", "append_to_response": "credits"},
+            )
         except (RuntimeError, urllib.error.HTTPError) as err:
             print(f"\n  skip {movie_id}: {err}", file=sys.stderr)
             continue
