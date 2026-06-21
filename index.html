@@ -553,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 8</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 10</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -2654,7 +2654,6 @@
   // score scaled by 0.85 before placement, within a bounded look-ahead window so
   // the pass stays near-linear.
   function blendRecommendations(ranked, max) {
-    const newTarget  = Math.round(max * REC_CONFIG.newFraction);
     const newRanked  = ranked.filter((r) => r.isNew);
     const oldRanked  = ranked.filter((r) => !r.isNew);
     const out  = [];
@@ -2678,13 +2677,13 @@
     }
 
     while (out.length < max && (ni < newRanked.length || pi < oldRanked.length)) {
-      const wantNew = newCount < newTarget;
+      const wantNew = newCount < Math.round((out.length + 1) * REC_CONFIG.newFraction);
       let pick = null;
       if (wantNew) {
         while (ni < newRanked.length && used.has(newRanked[ni].movie)) ni++;
         pick = pickFrom(newRanked, ni);
       }
-      // Fallback always draws from the *historical* lane so post-2024 releases
+      // Fallback always draws from the *historical* lane so recent releases
       // never flood the slots reserved for older films.
       if (!pick) {
         while (pi < oldRanked.length && used.has(oldRanked[pi].movie)) pi++;
