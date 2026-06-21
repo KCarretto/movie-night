@@ -67,9 +67,12 @@
     @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(124,92,255,.55)} 70%{box-shadow:0 0 0 8px rgba(124,92,255,0)} 100%{box-shadow:0 0 0 0 rgba(124,92,255,0)} }
 
     /* Draggable rank rows */
-    .rank-row { transition: transform .12s ease, box-shadow .12s ease, opacity .12s ease; }
-    .rank-row.dragging { opacity: .6; box-shadow: 0 8px 24px rgba(0,0,0,.5); }
-    .rank-row.drag-over { transform: translateY(2px); border-color: #7c5cff; }
+    .rank-row { transition: box-shadow .12s ease, opacity .12s ease; }
+    .rank-row.dragging { opacity: .85; box-shadow: 0 8px 24px rgba(0,0,0,.5); border-color: #7c5cff; }
+    .rank-row.drag-over { border-color: #7c5cff; }
+    /* Drag handle — `touch-action:none` lets us own touch gestures (no scroll). */
+    .drag-handle { touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
+    .drag-handle:active { cursor: grabbing; }
 
     /* Winner celebration */
     @keyframes popIn { 0%{transform:scale(.8);opacity:0} 60%{transform:scale(1.04)} 100%{transform:scale(1);opacity:1} }
@@ -125,6 +128,18 @@
         </div>
       </div>
 
+      <!-- Editable display name. Defaults to a fun nickname placeholder. -->
+      <div class="mt-4">
+        <label for="nameInput" class="text-[11px] uppercase tracking-wider text-slate-400">Your name</label>
+        <form id="nameForm" class="flex gap-2 mt-1">
+          <input id="nameInput" maxlength="24" autocomplete="off"
+                 placeholder="Pick a name…"
+                 class="flex-1 min-w-0 bg-ink border border-line rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-accent2" />
+          <button id="saveNameBtn" type="submit" class="btn btn-accent2 text-white text-sm font-semibold px-3 py-2 rounded-lg">Save</button>
+        </form>
+        <p id="nameMsg" class="text-xs text-slate-500 mt-1 h-4"></p>
+      </div>
+
       <!-- Host-only sharing block (QR + copy link). Hidden for guests. -->
       <div id="shareBlock" class="hidden mt-4 grid sm:grid-cols-[auto,1fr] gap-4 items-center">
         <div class="bg-white p-2 rounded-xl mx-auto sm:mx-0">
@@ -163,7 +178,7 @@
     <section id="phaseNominate" class="card p-4 space-y-4">
       <div class="flex items-center justify-between">
         <h2 class="font-display text-2xl">NOMINATE</h2>
-        <span class="text-xs text-slate-400">Pick up to 2 movies</span>
+        <span class="text-xs text-slate-400">Pick up to 3 movies</span>
       </div>
 
       <form id="nominateForm" class="flex gap-2">
@@ -189,7 +204,7 @@
     <!-- ===================== PHASE 2: VOTING ===================== -->
     <section id="phaseVote" class="hidden card p-4 space-y-4">
       <h2 class="font-display text-2xl">RANK YOUR CHOICES</h2>
-      <p class="text-sm text-slate-400">Drag to reorder, or use the arrows. #1 is your favourite.</p>
+      <p class="text-sm text-slate-400">Drag the ⠿ handle to reorder, or use the arrows. #1 is your favourite.</p>
       <ul id="ballot" class="space-y-2"></ul>
       <button id="submitVoteBtn" class="btn btn-primary text-white font-semibold w-full py-3 rounded-xl">Submit Vote</button>
       <p id="voteMsg" class="text-center text-sm text-emerald-400 h-5"></p>
@@ -204,6 +219,11 @@
       <div id="winnerCard" class="pop-in text-center bg-gradient-to-b from-panel2 to-ink border border-gold/40 rounded-2xl p-6">
         <div id="winnerTitle" class="font-display text-4xl text-gold">—</div>
         <div id="winnerSub" class="text-sm text-slate-400 mt-1"></div>
+      </div>
+
+      <div>
+        <div class="text-[11px] uppercase tracking-wider text-slate-400 mb-2">How everyone ranked each choice</div>
+        <div id="rankMatrix" class="space-y-2"></div>
       </div>
 
       <div>
@@ -242,8 +262,59 @@
 
   // ----------------------------- Constants ------------------------------
   const MAX_PEERS = 6;          // including host
-  const MAX_NOMINATIONS = 2;    // movies per person
+  const MAX_NOMINATIONS = 3;    // movies per person
   const ROOM_ID_LEN = 6;
+  const MAX_NAME_LEN = 24;      // display-name character cap
+
+  // 100 fun/cute nicknames used as default placeholders for participants.
+  const FUN_NAMES = [
+    'Popcorn Pixie', 'Captain Cuddles', 'Sir Snacks-a-Lot', 'Bubbly Otter', 'Disco Penguin',
+    'Marshmallow Mage', 'Cozy Raccoon', 'Velvet Llama', 'Pixel Pony', 'Glitter Goblin',
+    'Mango Tango', 'Sleepy Koala', 'Turbo Turtle', 'Waffle Wizard', 'Nacho Average',
+    'Pickle Rickle', 'Snuggle Bug', 'Banana Bandit', 'Cosmic Corgi', 'Jelly Bean Jr.',
+    'Wobbly Walrus', 'Sneaky Sloth', 'Fuzzy Peach', 'Doodle Dragon', 'Pepper Pop',
+    'Biscuit Boss', 'Twinkle Toes', 'Noodle Knight', 'Sassy Squid', 'Maple Munchkin',
+    'Bouncy Bean', 'Captain Comfy', 'Giggly Gecko', 'Mochi Monster', 'Sprinkle Sprite',
+    'Cuddly Cactus', 'Zippy Zebra', 'Honey Badger Jr.', 'Cocoa Comet', 'Fluffy Phoenix',
+    'Waffles McGee', 'Gummy Bear King', 'Pixel Panda', 'Salty Pretzel', 'Dizzy Dolphin',
+    'Lil Sasquatch', 'Mellow Marshmallow', 'Funky Ferret', 'Bubble Tea Boss', 'Star Muffin',
+    'Quokka Quokka', 'Dapper Duckling', 'Choco Chip', 'Rambling Radish', 'Mighty Meatball',
+    'Sunny Sloth', 'Glimmer Goose', 'Pancake Pirate', 'Tiny Tornado', 'Velcro Vulture',
+    'Cosmic Cupcake', 'Jolly Jellyfish', 'Pickle Pixel', 'Wiggly Wombat', 'Toasty Toad',
+    'Snappy Snail', 'Lava Lamp Larry', 'Bramble Bunny', 'Cheeky Chinchilla', 'Mint Condition',
+    'Razzle Dazzle', 'Puddle Jumper', 'Fizzy Fox', 'Grumpy Gnome', 'Sundae Funday',
+    'Whisker Wizard', 'Boba Bandit', 'Pixel Possum', 'Crispy Comet', 'Loopy Lemur',
+    'Sir Wigglesworth', 'Cuddlefish', 'Taco Tuesday', 'Plushie Pilot', 'Nimble Newt',
+    'Glow Worm', 'Bubblegum Baron', 'Sleepy Sundae', 'Captain Crumbs', 'Twirly Whirly',
+    'Mango Marauder', 'Frosty Ferret', 'Doodlebug', 'Spicy Samosa', 'Mellow Moose',
+    'Pocket Rocket', 'Wandering Waffle', 'Cinnamon Swirl', 'Lucky Ladybug', 'Galaxy Gummy',
+  ];
+
+  // Pick a nickname not already used by other peers (falls back to a numbered one).
+  function pickNickname(takenNames) {
+    const taken = new Set(takenNames);
+    const pool = FUN_NAMES.filter((n) => !taken.has(n));
+    if (pool.length) return pool[Math.floor(Math.random() * pool.length)];
+    return `Guest ${Math.floor(Math.random() * 1000)}`;
+  }
+
+  // Sanitize a user-submitted display name.
+  function cleanName(raw) {
+    return String(raw || '').replace(/\s+/g, ' ').trim().slice(0, MAX_NAME_LEN);
+  }
+
+  // ---- Session-storage persistence of the participant's chosen name ----
+  const NAME_STORAGE_KEY = 'movieNightName';
+  function loadSavedName() {
+    try { return cleanName(sessionStorage.getItem(NAME_STORAGE_KEY) || ''); }
+    catch (e) { return ''; }
+  }
+  function saveName(name) {
+    try {
+      if (name) sessionStorage.setItem(NAME_STORAGE_KEY, name);
+      else sessionStorage.removeItem(NAME_STORAGE_KEY);
+    } catch (e) { /* storage may be unavailable */ }
+  }
 
   // ------------------------- Small DOM helpers --------------------------
   const $ = (sel) => document.querySelector(sel);
@@ -310,9 +381,10 @@
 
     peer.on('open', (id) => {
       myId = id;
-      // Seed the authoritative peer list with ourselves as "Host".
-      state.peers = [{ id, name: 'Host' }];
-      myName = 'Host';
+      // Seed the authoritative peer list with ourselves, using a saved or fun name.
+      const initialName = loadSavedName() || pickNickname([]);
+      state.peers = [{ id, name: initialName }];
+      myName = initialName;
       $('#youLabel').textContent = myName;
       setStatus('ok', `Hosting · 1/${MAX_PEERS}`);
       renderShareBlock();
@@ -355,8 +427,8 @@
     const hostId = `room-${roomId}-host`;
     const conn = peer.connect(hostId, { reliable: true, metadata: { role: 'guest' } });
     setupConnection(conn, () => {
-      // Introduce ourselves once the channel is open.
-      safeSend(conn, { type: 'join' });
+      // Introduce ourselves once the channel is open (with any saved name).
+      safeSend(conn, { type: 'join', name: loadSavedName() });
     });
   }
 
@@ -408,7 +480,7 @@
       // ----- Guest -> Host: a new peer announces itself -----
       case 'join':
         if (!isHost) return;
-        hostAddPeer(conn.peer);
+        hostAddPeer(conn.peer, msg.name);
         break;
 
       // ----- Host -> All: roster of every peer id so guests can mesh -----
@@ -438,7 +510,7 @@
   // ======================================================================
   //  HOST: roster management
   // ======================================================================
-  function hostAddPeer(peerId) {
+  function hostAddPeer(peerId, requestedName) {
     if (state.peers.find((p) => p.id === peerId)) return; // dup guard
 
     if (state.peers.length >= MAX_PEERS) {
@@ -449,7 +521,10 @@
       return;
     }
 
-    const name = `Peer ${state.peers.length + 1}`;
+    // Use the guest's saved name if provided & free, otherwise a fun nickname.
+    const taken = state.peers.map((p) => p.name);
+    const cleaned = cleanName(requestedName);
+    const name = (cleaned && !taken.includes(cleaned)) ? cleaned : pickNickname(taken);
     state.peers.push({ id: peerId, name });
 
     broadcastDirectory();
@@ -582,6 +657,17 @@
         state.results = null;
         break;
       }
+
+      case 'setName': {
+        const target = state.peers.find((p) => p.id === fromId);
+        if (!target) return;
+        const cleaned = cleanName(action.name);
+        if (!cleaned) return;
+        // Avoid collisions with another participant's name.
+        if (state.peers.some((p) => p.id !== fromId && p.name === cleaned)) return;
+        target.name = cleaned;
+        break;
+      }
     }
 
     broadcastState();
@@ -612,7 +698,10 @@
    */
   function instantRunoff(votes, movies) {
     const titleOf = (id) => (movies.find((m) => m.id === id) || {}).title || '—';
-    const ballots = Object.values(votes).filter((b) => Array.isArray(b) && b.length);
+    // Keep voter ids alongside each ballot so we can show who backs each choice.
+    const ballots = Object.entries(votes)
+      .filter(([, b]) => Array.isArray(b) && b.length)
+      .map(([voterId, ranking]) => ({ voterId, ranking }));
     const totalBallots = ballots.length;
 
     let remaining = new Set(movies.map((m) => m.id));
@@ -625,23 +714,32 @@
 
     // Safety bound: at most one elimination per candidate.
     for (let guard = 0; guard < movies.length + 1 && remaining.size > 0; guard++) {
-      // Tally each ballot's top choice that is still in the running.
+      // Tally each ballot's top choice that is still in the running, and record
+      // which voters are currently backing each candidate (the redistribution).
       const tally = {};
-      remaining.forEach((id) => (tally[id] = 0));
+      const backers = {};
+      remaining.forEach((id) => { tally[id] = 0; backers[id] = []; });
       let counted = 0;
+      let exhausted = 0;
       ballots.forEach((b) => {
-        const pick = b.find((id) => remaining.has(id));
-        if (pick !== undefined) { tally[pick]++; counted++; }
+        const pick = b.ranking.find((id) => remaining.has(id));
+        if (pick !== undefined) { tally[pick]++; backers[pick].push(b.voterId); counted++; }
+        else exhausted++;
       });
 
       const entries = Object.entries(tally).sort((a, b) => b[1] - a[1]);
       const majority = counted / 2;
+      const needToWin = Math.floor(counted / 2) + 1;
 
       const roundInfo = {
-        tally: entries.map(([id, n]) => ({ id, title: titleOf(id), votes: n })),
+        tally: entries.map(([id, n]) => ({ id, title: titleOf(id), votes: n, backers: backers[id].slice() })),
         counted,
+        exhausted,
+        needToWin,
         eliminated: null,
+        eliminationReason: null,
         winner: null,
+        winReason: null,
       };
 
       // Win condition: strictly more than 50% of counted ballots.
@@ -649,6 +747,9 @@
       if (topId && (topVotes > majority || remaining.size === 1)) {
         winnerId = topId;
         roundInfo.winner = { id: topId, title: titleOf(topId), votes: topVotes };
+        roundInfo.winReason = remaining.size === 1
+          ? 'Last choice standing — wins by default.'
+          : `Has ${topVotes} of ${counted} active ballot${counted === 1 ? '' : 's'} — a majority (needed ${needToWin}).`;
         rounds.push(roundInfo);
         break;
       }
@@ -663,6 +764,11 @@
       }
       losers.forEach((id) => remaining.delete(id));
       roundInfo.eliminated = losers.map((id) => ({ id, title: titleOf(id) }));
+      const loserTitles = losers.map((id) => titleOf(id)).join(', ');
+      roundInfo.eliminationReason =
+        `No choice reached a majority (${needToWin} of ${counted} needed). ` +
+        `Eliminated ${loserTitles} with the fewest votes (${lowest}); ` +
+        `those ballots now transfer to their next still-standing pick.`;
       rounds.push(roundInfo);
     }
 
@@ -681,9 +787,19 @@
     renderPeers();
     renderPhase();
     renderMovies();
+    renderNameField();
     renderBallotIfNeeded();
     renderVoteProgress();
     renderResults();
+  }
+
+  // Keep the name input's placeholder in sync with our current display name.
+  function renderNameField() {
+    const input = $('#nameInput');
+    if (!input || document.activeElement === input) return;
+    const transient = ['', '…', 'Connecting…'];
+    const current = !transient.includes(myName) ? myName : loadSavedName();
+    input.placeholder = current ? current : 'Pick a name…';
   }
 
   function renderPeers() {
@@ -748,7 +864,7 @@
     btn.classList.toggle('opacity-40', disabled);
     $('#nominateMsg').textContent = left > 0
       ? `You can add ${left} more movie${left === 1 ? '' : 's'}.`
-      : 'You have used both of your nominations.';
+      : 'You have used all of your nominations.';
   }
 
   // ---- Phase 2: drag-and-drop / arrow ranking ballot ----
@@ -775,51 +891,94 @@
     ballotOrder.forEach((id, idx) => {
       const movie = state.movies.find((m) => m.id === id);
       if (!movie) return;
-      const li = el('li', 'rank-row flex items-center gap-3 bg-panel2 border border-line rounded-lg px-3 py-2.5');
-      li.draggable = !hasVotedLocally;
+      const li = el('li', 'rank-row flex items-center gap-2 bg-panel2 border border-line rounded-lg px-3 py-2.5');
       li.dataset.id = id;
       li.innerHTML = `
-        <span class="font-display text-2xl text-accent2 w-7 text-center">${idx + 1}</span>
+        <span class="rank-num font-display text-2xl text-accent2 w-7 text-center">${idx + 1}</span>
         <span class="flex-1 text-sm font-medium truncate">${escapeHtml(movie.title)}</span>
         <span class="flex flex-col gap-1">
-          <button data-dir="up" class="up btn w-7 h-7 rounded bg-ink border border-line text-xs leading-none">▲</button>
-          <button data-dir="down" class="down btn w-7 h-7 rounded bg-ink border border-line text-xs leading-none">▼</button>
-        </span>`;
+          <button data-dir="up" class="up btn w-7 h-7 rounded bg-ink border border-line text-xs leading-none" aria-label="Move up">▲</button>
+          <button data-dir="down" class="down btn w-7 h-7 rounded bg-ink border border-line text-xs leading-none" aria-label="Move down">▼</button>
+        </span>
+        <span class="drag-handle px-1 text-lg text-slate-500 select-none" aria-label="Drag to reorder" title="Drag to reorder">⠿</span>`;
 
       if (!hasVotedLocally) {
         // Arrow controls.
         li.querySelector('.up').onclick = () => moveBallot(idx, -1);
         li.querySelector('.down').onclick = () => moveBallot(idx, 1);
-        // Drag-and-drop.
-        li.addEventListener('dragstart', (e) => { li.classList.add('dragging'); e.dataTransfer.setData('text/plain', id); });
-        li.addEventListener('dragend', () => li.classList.remove('dragging'));
-        li.addEventListener('dragover', (e) => { e.preventDefault(); li.classList.add('drag-over'); });
-        li.addEventListener('dragleave', () => li.classList.remove('drag-over'));
-        li.addEventListener('drop', (e) => {
-          e.preventDefault();
-          li.classList.remove('drag-over');
-          const draggedId = e.dataTransfer.getData('text/plain');
-          reorderBallot(draggedId, id);
-        });
+        // Pointer-based drag (works for mouse, touch, and pen).
+        attachPointerDrag(li, li.querySelector('.drag-handle'));
+      } else {
+        li.querySelector('.drag-handle').classList.add('opacity-30');
       }
       ul.appendChild(li);
     });
+  }
+
+  // Renumber the visible ballot rows (used during a live drag, no full re-render).
+  function renumberBallot() {
+    const rows = $('#ballot').querySelectorAll('.rank-row');
+    rows.forEach((row, i) => {
+      const num = row.querySelector('.rank-num');
+      if (num) num.textContent = i + 1;
+    });
+  }
+
+  // Find the row that a given Y position should drop *before* (null = end).
+  function getDragAfterElement(container, y) {
+    const rows = [...container.querySelectorAll('.rank-row:not(.dragging)')];
+    let closest = { offset: -Infinity, element: null };
+    rows.forEach((child) => {
+      const box = child.getBoundingClientRect();
+      const offset = y - box.top - box.height / 2;
+      if (offset < 0 && offset > closest.offset) closest = { offset, element: child };
+    });
+    return closest.element;
+  }
+
+  // Touch/mouse/pen reordering via Pointer Events (fixes mobile drag).
+  function attachPointerDrag(li, handle) {
+    if (!handle) return;
+    let dragging = false;
+    let activePointer = null;
+
+    handle.addEventListener('pointerdown', (e) => {
+      if (hasVotedLocally) return;
+      e.preventDefault();
+      dragging = true;
+      activePointer = e.pointerId;
+      li.classList.add('dragging');
+      try { handle.setPointerCapture(e.pointerId); } catch (_) {}
+    });
+
+    handle.addEventListener('pointermove', (e) => {
+      if (!dragging || e.pointerId !== activePointer) return;
+      e.preventDefault();
+      const ul = $('#ballot');
+      const after = getDragAfterElement(ul, e.clientY);
+      if (after == null) ul.appendChild(li);
+      else if (after !== li) ul.insertBefore(li, after);
+      renumberBallot();
+    });
+
+    const end = (e) => {
+      if (!dragging || (activePointer !== null && e.pointerId !== activePointer)) return;
+      dragging = false;
+      activePointer = null;
+      li.classList.remove('dragging');
+      try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
+      // Rebuild the canonical order from the final DOM order.
+      ballotOrder = [...$('#ballot').querySelectorAll('.rank-row')].map((n) => n.dataset.id);
+      renderBallotIfNeeded();
+    };
+    handle.addEventListener('pointerup', end);
+    handle.addEventListener('pointercancel', end);
   }
 
   function moveBallot(idx, delta) {
     const j = idx + delta;
     if (j < 0 || j >= ballotOrder.length) return;
     [ballotOrder[idx], ballotOrder[j]] = [ballotOrder[j], ballotOrder[idx]];
-    renderBallotIfNeeded();
-  }
-
-  function reorderBallot(draggedId, targetId) {
-    if (draggedId === targetId) return;
-    const from = ballotOrder.indexOf(draggedId);
-    const to = ballotOrder.indexOf(targetId);
-    if (from < 0 || to < 0) return;
-    ballotOrder.splice(from, 1);
-    ballotOrder.splice(to, 0, draggedId);
     renderBallotIfNeeded();
   }
 
@@ -837,20 +996,57 @@
       ? `Won across ${r.rounds.length} round${r.rounds.length === 1 ? '' : 's'} · ${r.totalBallots} ballot${r.totalBallots === 1 ? '' : 's'}`
       : 'Nobody submitted a ranking.';
 
+    const nameOf = (peerId) => {
+      const p = state.peers.find((x) => x.id === peerId);
+      return p ? p.name : 'Unknown';
+    };
+
+    // ---- Per-choice rank matrix: what rank each participant gave each movie ----
+    const matrix = $('#rankMatrix');
+    matrix.innerHTML = '';
+    // Participants who actually submitted a ranking.
+    const voters = state.peers.filter((p) => Array.isArray(state.votes[p.id]) && state.votes[p.id].length);
+    const nonVoters = state.peers.filter((p) => !(Array.isArray(state.votes[p.id]) && state.votes[p.id].length));
+
+    state.movies.forEach((m) => {
+      const box = el('div', 'bg-panel2 border border-line rounded-lg p-3');
+      const chips = voters.map((p) => {
+        const ranking = state.votes[p.id];
+        const pos = ranking.indexOf(m.id);
+        const ranked = pos >= 0;
+        const label = ranked ? `#${pos + 1}` : 'unranked';
+        const tone = !ranked ? 'bg-ink text-slate-500 border-line'
+          : pos === 0 ? 'bg-gold/20 text-gold border-gold/40'
+          : pos === 1 ? 'bg-accent2/20 text-accent2 border-accent2/40'
+          : 'bg-ink text-slate-300 border-line';
+        return `<span class="text-[11px] px-2 py-0.5 rounded-full border ${tone}">${escapeHtml(p.name)} · ${label}</span>`;
+      }).join('');
+      box.innerHTML = `
+        <div class="text-sm font-semibold mb-2 truncate">${escapeHtml(m.title)}</div>
+        <div class="flex flex-wrap gap-1.5">${chips || '<span class="text-[11px] text-slate-500">No ballots submitted.</span>'}</div>`;
+      matrix.appendChild(box);
+    });
+    if (nonVoters.length) {
+      const note = el('div', 'text-[11px] text-slate-500');
+      note.textContent = `Did not vote: ${nonVoters.map((p) => p.name).join(', ')}`;
+      matrix.appendChild(note);
+    }
+
     const wrap = $('#rounds');
     wrap.innerHTML = '';
     r.rounds.forEach((round, i) => {
       const box = el('div', 'bg-panel2 border border-line rounded-lg p-3');
       const head = el('div', 'flex items-center justify-between mb-2');
       head.innerHTML = `<span class="font-display text-lg">Round ${i + 1}</span>
-        <span class="text-[11px] text-slate-500">${round.counted} active ballot${round.counted === 1 ? '' : 's'}</span>`;
+        <span class="text-[11px] text-slate-500">${round.counted} active ballot${round.counted === 1 ? '' : 's'}${round.exhausted ? ` · ${round.exhausted} exhausted` : ''}</span>`;
       box.appendChild(head);
 
       const max = Math.max(1, ...round.tally.map((t) => t.votes));
       round.tally.forEach((t) => {
         const isWinner = round.winner && round.winner.id === t.id;
         const isOut = round.eliminated && round.eliminated.some((e) => e.id === t.id);
-        const row = el('div', 'mb-1.5');
+        const backerNames = (t.backers || []).map(nameOf);
+        const row = el('div', 'mb-2');
         row.innerHTML = `
           <div class="flex justify-between text-xs mb-0.5">
             <span class="${isOut ? 'line-through text-slate-500' : ''} ${isWinner ? 'text-gold font-semibold' : ''}">
@@ -861,9 +1057,20 @@
           <div class="h-2 rounded bg-ink overflow-hidden">
             <div class="h-full rounded" style="width:${(t.votes / max) * 100}%;
               background:${isWinner ? '#ffce4d' : isOut ? '#475063' : '#7c5cff'}"></div>
-          </div>`;
+          </div>
+          <div class="text-[11px] text-slate-500 mt-0.5">${backerNames.length ? 'Backed by: ' + escapeHtml(backerNames.join(', ')) : 'No first-choice support this round'}</div>`;
         box.appendChild(row);
       });
+
+      // Plain-language explanation of what happened this round.
+      if (round.winReason || round.eliminationReason) {
+        const why = el('div', `mt-2 text-xs rounded-lg px-3 py-2 border ${round.winReason ? 'border-gold/40 bg-gold/10 text-gold' : 'border-line bg-ink text-slate-300'}`);
+        why.textContent = round.winReason
+          ? `🏆 ${round.winner.title}: ${round.winReason}`
+          : `➡️ ${round.eliminationReason}`;
+        box.appendChild(why);
+      }
+
       wrap.appendChild(box);
     });
 
@@ -943,6 +1150,24 @@
 
     // Host: lock nominations & start voting.
     $('#lockBtn').addEventListener('click', () => dispatch({ type: 'startVoting' }));
+
+    // Set / change my display name (persisted in session storage).
+    $('#nameForm').addEventListener('submit', (e) => {
+      e.preventDefault();
+      const input = $('#nameInput');
+      const name = cleanName(input.value);
+      if (!name) return;
+      saveName(name);
+      myName = name;                       // optimistic local update
+      $('#youLabel').textContent = myName;
+      dispatch({ type: 'setName', name });
+      input.value = '';
+      input.blur();
+      const msg = $('#nameMsg');
+      msg.textContent = '✅ Name saved!';
+      setTimeout(() => { msg.textContent = ''; }, 1800);
+      renderNameField();
+    });
 
     // Submit my ranked ballot.
     $('#submitVoteBtn').addEventListener('click', () => {
