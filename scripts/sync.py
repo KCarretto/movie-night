@@ -299,15 +299,31 @@ class TMDBClient:
         raise RuntimeError(f"TMDB request failed: {url}: {last_error}")
 
 
-def fetch_omdb(api_key: str, imdb_id: str) -> Optional[Dict[str, Any]]:
+def fetch_omdb(
+    api_key: str, imdb_id: str, max_retries: int = 3, pause: float = 0.25
+) -> Optional[Dict[str, Any]]:
     if not api_key or not imdb_id:
         return None
     url = OMDB_BASE + "?" + urllib.parse.urlencode({"apikey": api_key, "i": imdb_id})
-    try:
-        data = _http_get_json(url)
-    except (urllib.error.URLError, ValueError):
-        return None
-    return data if data.get("Response") == "True" else None
+    last_error: Optional[Exception] = None
+    for attempt in range(max_retries):
+        try:
+            time.sleep(pause)
+            data = _http_get_json(url)
+            return data if data.get("Response") == "True" else None
+        except urllib.error.HTTPError as err:
+            if err.code == 429:
+                wait = int(err.headers.get("Retry-After", "1")) + 1
+                time.sleep(wait)
+                last_error = err
+                continue
+            last_error = err
+            time.sleep(1 + attempt)
+        except (urllib.error.URLError, ValueError) as err:
+            last_error = err
+            time.sleep(1 + attempt)
+    print(f"\n  OMDb skip {imdb_id}: {last_error}", file=sys.stderr)
+    return None
 
 
 def collect_movies_to_fetch(
@@ -411,7 +427,7 @@ def generate(
         except (RuntimeError, urllib.error.HTTPError) as err:
             print(f"\n  skip {movie_id}: {err}", file=sys.stderr)
             continue
-        omdb = fetch_omdb(omdb_key, detail.get("imdb_id", "")) if omdb_key else None
+        omdb = fetch_omdb(omdb_key, detail.get("imdb_id", ""), pause=pause) if omdb_key else None
         movie = build_movie(detail, omdb)
         if movie:
             movies.append(movie)
@@ -439,19 +455,20 @@ def default_ids_filename(today: Optional[datetime.date] = None) -> str:
     return today.strftime("movie_ids_%m_%d_%Y.json")
 
 
-def load_ids_file(path: str) -> List[int]:
-    """Read TMDB movie ids from a daily export file.
+def load_ids_file(path: str) -> Iterable[int]:
+    """Yield TMDB movie ids from a daily export file one at a time.
 
     The TMDB export (https://files.tmdb.org/p/exports/) is *newline-delimited*
     JSON — one object per line, e.g.::
 
         {"adult":false,"id":3924,"original_title":"Blondie","popularity":0.48}
 
-    Missing files are not an error: an empty list is returned so the caller can
-    continue with discovery only. Malformed lines are skipped individually.
+    Implemented as a generator so the (potentially very large) export file is
+    never fully loaded into memory — each id is yielded as its line is read.
+
+    Missing files are not an error: the generator simply yields nothing so the
+    caller can continue with discovery only. Malformed lines are skipped individually.
     """
-    ids: List[int] = []
-    seen = set()
     try:
         with open(path, "r", encoding="utf-8") as handle:
             for line in handle:
@@ -463,12 +480,10 @@ def load_ids_file(path: str) -> List[int]:
                 except ValueError:
                     continue
                 movie_id = obj.get("id") if isinstance(obj, dict) else None
-                if isinstance(movie_id, int) and movie_id not in seen:
-                    seen.add(movie_id)
-                    ids.append(movie_id)
+                if isinstance(movie_id, int):
+                    yield movie_id
     except OSError:
-        return []
-    return ids
+        return
 
 
 def wrap_output(movies: List[Dict[str, Any]], used_omdb: bool) -> Dict[str, Any]:
@@ -549,16 +564,30 @@ def main(argv: Optional[List[str]] = None) -> int:
     if existing:
         print(f"Resuming from {len(existing)} movie(s) in {args.output}.", file=sys.stderr)
 
-    ids = load_ids_file(args.ids_file)
-    if ids:
-        print(f"Loaded {len(ids)} movie id(s) from {args.ids_file}.", file=sys.stderr)
+    if os.path.isfile(args.ids_file):
+        print(f"Importing movie ids from {args.ids_file}.", file=sys.stderr)
+        ids: Optional[Iterable[int]] = load_ids_file(args.ids_file)
     else:
         print(f"No ids imported from {args.ids_file} (missing or empty).", file=sys.stderr)
+        ids = None
 
     payload = generate(args.pages, tmdb_key, omdb_key, args.pause, existing, ids)
-    with open(args.output, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2, ensure_ascii=False)
-        handle.write("\n")
+
+    # Write atomically: fill a temporary file first, then rename it into place so
+    # a crash or keyboard interrupt during serialisation never leaves a corrupt or
+    # truncated output file.
+    tmp_path = args.output + ".tmp"
+    try:
+        with open(tmp_path, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, indent=2, ensure_ascii=False)
+            handle.write("\n")
+        os.replace(tmp_path, args.output)
+    except Exception:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
     print(f"Wrote {len(payload['movies'])} movies to {args.output}", file=sys.stderr)
     return 0
 
