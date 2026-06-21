@@ -15,7 +15,13 @@ python3 scripts/generate_movies.py --pages 25 --output movies.json
 ```
 
 - `--pages 25` pulls ~1,000 movies (TMDB returns 20 per page; the script reads
-  both the `top_rated` and `popular` lists and de-dupes).
+  both the `top_rated` and `popular` lists and de-dupes). TMDB caps its lists at
+  500 pages, so larger values are clamped automatically instead of erroring.
+- `--pause` sets the delay (seconds) between TMDB requests to stay within rate
+  limits (default `0.25`). A live spinner shows download progress.
+- By default the script **resumes**: it loads the existing `--output` file and
+  only downloads movies it doesn't already have. Pass `--refresh` to rebuild
+  the whole catalogue from scratch.
 - Standard library only — nothing to `pip install`.
 
 ## Data sources & ratings

@@ -29,8 +29,13 @@ Usage
     export OMDB_API_KEY=yyyyyyyy        # optional, for RT + IMDb ratings
     python3 scripts/generate_movies.py --pages 25 --output movies.json
 
-``--pages 25`` pulls roughly 1,000 movies (TMDB returns 20 per page). The
-script only uses the Python standard library, so there is nothing to install.
+``--pages 25`` pulls roughly 1,000 movies (TMDB returns 20 per page). TMDB caps
+its lists at 500 pages, so larger values are clamped automatically. Downloads
+are rate-limited (``--pause`` seconds between requests) and show a live progress
+spinner. By default the script resumes from any existing ``--output`` file and
+only downloads movies it doesn't already have (use ``--refresh`` to rebuild from
+scratch). The script only uses the Python standard library, so there is nothing
+to install.
 """
 
 from __future__ import annotations
@@ -49,9 +54,68 @@ TMDB_BASE = "https://api.themoviedb.org/3"
 TMDB_IMAGE_BASE = "https://image.tmdb.org/t/p/w342"
 OMDB_BASE = "https://www.omdbapi.com/"
 
+# TMDB caps paginated list/discover endpoints at 500 pages; asking for more
+# returns an HTTP 400 ("Invalid page: Pages start at 1 and max is 500."). We
+# clamp to this so e.g. ``--pages 1000`` degrades gracefully instead of erroring.
+TMDB_MAX_PAGE = 500
+
 # Discovery endpoints we page through. Combining a couple of "good movie" lists
 # yields a broad, high-quality catalogue without too much obscure noise.
 TMDB_LISTS = ("movie/top_rated", "movie/popular")
+
+
+# ---------------------------------------------------------------------------
+# Progress reporting
+# ---------------------------------------------------------------------------
+class Progress:
+    """Tiny spinner / progress indicator so long downloads show they're alive.
+
+    On a TTY it animates a single in-place line (spinner + count + percentage).
+    When stderr is redirected (e.g. CI logs) it prints occasional standalone
+    lines instead, so logs stay readable without thousands of carriage returns.
+    """
+
+    FRAMES = "|/-\\"
+
+    def __init__(self, label: str, total: Optional[int] = None, stream=sys.stderr):
+        self.label = label
+        self.total = total if (total is None or total > 0) else None
+        self.stream = stream
+        self.count = 0
+        self._frame = 0
+        self._tty = bool(getattr(stream, "isatty", lambda: False)())
+
+    def update(self, count: Optional[int] = None, suffix: str = "") -> None:
+        self.count = self.count + 1 if count is None else count
+        self._frame += 1
+        self._render(suffix)
+
+    def _line(self, suffix: str) -> str:
+        spin = self.FRAMES[self._frame % len(self.FRAMES)]
+        if self.total:
+            pct = (self.count / self.total) * 100
+            line = f"{spin} {self.label}: {self.count}/{self.total} ({pct:5.1f}%)"
+        else:
+            line = f"{spin} {self.label}: {self.count}"
+        return f"{line} {suffix}".rstrip()
+
+    def _render(self, suffix: str) -> None:
+        line = self._line(suffix)
+        if self._tty:
+            self.stream.write("\r\033[K" + line)
+            self.stream.flush()
+        elif self.total and (self.count == self.total or self.count % 25 == 0):
+            self.stream.write(line + "\n")
+        elif not self.total and self.count % 25 == 0:
+            self.stream.write(line + "\n")
+
+    def done(self, suffix: str = "") -> None:
+        line = self._line(suffix)
+        if self._tty:
+            self.stream.write("\r\033[K" + line + "\n")
+        else:
+            self.stream.write(line + "\n")
+        self.stream.flush()
 
 
 # ---------------------------------------------------------------------------
@@ -151,12 +215,21 @@ def dedupe_movies(movies: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
     seen = set()
     out: List[Dict[str, Any]] = []
     for movie in movies:
-        key = movie["title"].strip().lower()
-        if key in seen:
+        key = title_key(movie.get("title", ""))
+        if not key or key in seen:
             continue
         seen.add(key)
         out.append(movie)
     return out
+
+
+def title_key(title: str) -> str:
+    """Normalize a title for de-duplication / resume matching.
+
+    Case-insensitive, trims surrounding whitespace and strips punctuation so
+    e.g. "Spider-Man" and "spider man" collapse to the same key.
+    """
+    return "".join(ch for ch in str(title or "").lower() if ch.isalnum())
 
 
 # ---------------------------------------------------------------------------
@@ -221,12 +294,30 @@ def fetch_omdb(api_key: str, imdb_id: str) -> Optional[Dict[str, Any]]:
     return data if data.get("Response") == "True" else None
 
 
-def collect_movie_ids(client: TMDBClient, pages: int) -> List[int]:
-    ids: List[int] = []
+def collect_movies_to_fetch(
+    client: TMDBClient, pages: int, progress: Optional[Progress] = None
+) -> List[tuple]:
+    """Page through the TMDB lists, returning ``(id, title)`` for each movie.
+
+    Stops a list early if TMDB rejects the page (HTTP 400 beyond its 500-page
+    cap) or returns no more results, so very large ``--pages`` values degrade
+    gracefully instead of crashing.
+    """
+    items: List[tuple] = []
     seen = set()
     for list_path in TMDB_LISTS:
         for page in range(1, pages + 1):
-            data = client.get(list_path, {"page": str(page), "language": "en-US"})
+            try:
+                data = client.get(list_path, {"page": str(page), "language": "en-US"})
+            except urllib.error.HTTPError as err:
+                if err.code == 400:
+                    print(
+                        f"\n  {list_path}: TMDB rejected page {page} (HTTP 400); "
+                        "stopping this list.",
+                        file=sys.stderr,
+                    )
+                    break
+                raise
             results = data.get("results", [])
             if not results:
                 break
@@ -234,35 +325,74 @@ def collect_movie_ids(client: TMDBClient, pages: int) -> List[int]:
                 movie_id = item.get("id")
                 if movie_id and movie_id not in seen:
                     seen.add(movie_id)
-                    ids.append(movie_id)
-    return ids
+                    title = (item.get("title") or item.get("name") or "").strip()
+                    items.append((movie_id, title))
+            if progress:
+                progress.update(suffix=f"{list_path} p{page} · {len(items)} found")
+    return items
 
 
 # ---------------------------------------------------------------------------
 # Orchestration
 # ---------------------------------------------------------------------------
-def generate(pages: int, tmdb_key: str, omdb_key: str) -> Dict[str, Any]:
-    client = TMDBClient(tmdb_key)
-    ids = collect_movie_ids(client, pages)
-    print(f"Discovered {len(ids)} candidate movies from TMDB.", file=sys.stderr)
+def generate(
+    pages: int,
+    tmdb_key: str,
+    omdb_key: str,
+    pause: float = 0.25,
+    existing: Optional[List[Dict[str, Any]]] = None,
+) -> Dict[str, Any]:
+    if pages > TMDB_MAX_PAGE:
+        print(
+            f"Note: TMDB caps lists at {TMDB_MAX_PAGE} pages; clamping --pages "
+            f"{pages} → {TMDB_MAX_PAGE}.",
+            file=sys.stderr,
+        )
+        pages = TMDB_MAX_PAGE
 
-    movies: List[Dict[str, Any]] = []
-    for index, movie_id in enumerate(ids, start=1):
+    client = TMDBClient(tmdb_key, pause=pause)
+
+    discover = Progress("Discovering movies", total=pages * len(TMDB_LISTS))
+    candidates = collect_movies_to_fetch(client, pages, discover)
+    discover.done(suffix=f"{len(candidates)} candidates")
+
+    # Resume support: keep movies we already have and only download the new ones.
+    existing = existing or []
+    known = {title_key(m.get("title", "")) for m in existing if m.get("title")}
+    pending = [(mid, title) for (mid, title) in candidates if title_key(title) not in known]
+    skipped = len(candidates) - len(pending)
+    if skipped:
+        print(f"Skipping {skipped} movie(s) already in the catalogue.", file=sys.stderr)
+
+    movies: List[Dict[str, Any]] = list(existing)
+    progress = Progress("Downloading details", total=len(pending))
+    for movie_id, _title in pending:
+        progress.update()
         try:
             detail = client.get(f"movie/{movie_id}", {"language": "en-US"})
-        except RuntimeError as err:
-            print(f"  skip {movie_id}: {err}", file=sys.stderr)
+        except (RuntimeError, urllib.error.HTTPError) as err:
+            print(f"\n  skip {movie_id}: {err}", file=sys.stderr)
             continue
         omdb = fetch_omdb(omdb_key, detail.get("imdb_id", "")) if omdb_key else None
         movie = build_movie(detail, omdb)
         if movie:
             movies.append(movie)
-        if index % 50 == 0:
-            print(f"  processed {index}/{len(ids)}…", file=sys.stderr)
+    progress.done(suffix=f"{len(movies)} movies total")
 
     movies = dedupe_movies(movies)
     movies.sort(key=lambda m: (m["ratings"].get("imdb") or 0), reverse=True)
     return wrap_output(movies, bool(omdb_key))
+
+
+def load_existing(path: str) -> List[Dict[str, Any]]:
+    """Load movies from a previously generated catalogue (for resume)."""
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            data = json.load(handle)
+    except (OSError, ValueError):
+        return []
+    movies = data if isinstance(data, list) else data.get("movies", [])
+    return [m for m in movies if isinstance(m, dict) and m.get("title")]
 
 
 def wrap_output(movies: List[Dict[str, Any]], used_omdb: bool) -> Dict[str, Any]:
@@ -295,6 +425,18 @@ def parse_args(argv: Optional[List[str]] = None) -> argparse.Namespace:
         default=os.path.join(os.path.dirname(os.path.dirname(__file__)), "movies.json"),
         help="Path to write the JSON catalogue. Default: <repo>/movies.json.",
     )
+    parser.add_argument(
+        "--pause",
+        type=float,
+        default=0.25,
+        help="Seconds to wait between TMDB requests (rate limit). Default: 0.25.",
+    )
+    parser.add_argument(
+        "--refresh",
+        action="store_true",
+        help="Re-download everything instead of resuming from the existing "
+        "--output file (which is skipped by default).",
+    )
     return parser.parse_args(argv)
 
 
@@ -316,7 +458,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             file=sys.stderr,
         )
 
-    payload = generate(args.pages, tmdb_key, omdb_key)
+    if args.pause < 0:
+        print("ERROR: --pause must be >= 0.", file=sys.stderr)
+        return 2
+
+    existing = [] if args.refresh else load_existing(args.output)
+    if existing:
+        print(f"Resuming from {len(existing)} movie(s) in {args.output}.", file=sys.stderr)
+
+    payload = generate(args.pages, tmdb_key, omdb_key, args.pause, existing)
     with open(args.output, "w", encoding="utf-8") as handle:
         json.dump(payload, handle, indent=2, ensure_ascii=False)
         handle.write("\n")
