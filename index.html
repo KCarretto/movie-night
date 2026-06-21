@@ -795,6 +795,17 @@
       return { winnerId: null, winnerTitle: null, rounds: [], totalBallots: 0 };
     }
 
+    // Pre-calculate genuine first-preference tallies so ties can be broken by
+    // each candidate's first-round support (not by an arbitrary later round).
+    const firstRoundTally = {};
+    movies.forEach((m) => { firstRoundTally[m.id] = 0; });
+    ballots.forEach((b) => {
+      const first = b.ranking[0];
+      if (first !== undefined && firstRoundTally[first] !== undefined) {
+        firstRoundTally[first]++;
+      }
+    });
+
     // Safety bound: at most one elimination per candidate.
     for (let guard = 0; guard < movies.length + 1 && remaining.size > 0; guard++) {
       // Tally each ballot's top choice that is still in the running, and record
@@ -837,14 +848,18 @@
         break;
       }
 
-      // Otherwise eliminate the lowest scorer(s). Handle ties by removing all
-      // tied-lowest candidates only if that doesn't wipe everyone.
+      // Otherwise eliminate exactly one candidate: the lowest scorer. If several
+      // candidates tie for last, break the tie using genuine first-round tallies
+      // and remove only the single worst performer so the next round can
+      // redistribute that candidate's ballots correctly.
       const lowest = entries[entries.length - 1][1];
       let losers = entries.filter(([, n]) => n === lowest).map(([id]) => id);
-      if (losers.length === remaining.size) {
-        // Perfect tie among all remaining → break by first-preference order.
-        losers = [entries[entries.length - 1][0]];
+      if (losers.length > 1) {
+        // Tie for last → order by fewest genuine first-preference votes.
+        losers.sort((a, b) => firstRoundTally[a] - firstRoundTally[b]);
       }
+      // Enforce single elimination: only the single worst-performing candidate.
+      losers = [losers[0]];
       losers.forEach((id) => remaining.delete(id));
       roundInfo.eliminated = losers.map((id) => ({ id, title: titleOf(id) }));
       const loserTitles = losers.map((id) => titleOf(id)).join(', ');
