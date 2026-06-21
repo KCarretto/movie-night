@@ -150,6 +150,27 @@
       display: none; font-size: 12px; line-height: 1.4; color: #cbd5e1; padding: 10px 12px; }
     .desc-wrap:hover .desc-pop, .desc-wrap:focus-within .desc-pop, .desc-wrap.open .desc-pop { display: block; }
 
+    /* Recommended-movies carousel: a horizontally scrollable, snap-aligned row
+       of poster cards with optional prev/next nav buttons on wider screens. */
+    .rec-track { display: flex; gap: 12px; overflow-x: auto; scroll-behavior: smooth;
+      scroll-snap-type: x proximity; padding: 2px 2px 10px; -webkit-overflow-scrolling: touch; }
+    .rec-track::-webkit-scrollbar { height: 6px; }
+    .rec-track::-webkit-scrollbar-thumb { background: #2a3242; border-radius: 9999px; }
+    .rec-card { scroll-snap-align: start; flex: 0 0 150px; width: 150px; background: #141821;
+      border: 1px solid #2a3242; border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; }
+    .rec-poster { width: 100%; height: 200px; border-radius: 0; }
+    .rec-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      overflow: hidden; }
+    .rec-badge { position: absolute; top: 8px; left: 8px; font-size: 10px; line-height: 1;
+      padding: 3px 7px; border-radius: 9999px; background: rgba(124,92,255,.92); color: #fff;
+      letter-spacing: .04em; }
+    .rec-nav { position: absolute; top: 92px; z-index: 6; width: 34px; height: 34px; border-radius: 9999px;
+      background: rgba(20,24,33,.9); border: 1px solid #2a3242; color: #cbd5e1; display: none;
+      align-items: center; justify-content: center; cursor: pointer; }
+    .rec-nav:hover { color: #fff; border-color: #3a4760; }
+    .rec-prev { left: -6px; } .rec-next { right: -6px; }
+    @media (min-width: 640px) { .rec-nav { display: flex; } }
+
     /* Backdrop collage built from the art of the currently nominated movies.
        A lightly-blurred, tiled mosaic (columns of posters, repeated vertically)
        so the page takes on the flavour of the current options while staying
@@ -294,6 +315,30 @@
       <div id="peerGrid" class="grid grid-cols-2 sm:grid-cols-3 gap-2"></div>
     </section>
 
+    <!-- ===================== RECOMMENDED MOVIES ===================== -->
+    <!-- A horizontally scrollable carousel of suggestions. Recommendations are a
+         progressive enhancement powered by movies.json + the viewer's saved
+         ratings; the whole section hides itself when the catalogue is missing
+         or the room has left the lobby phase. -->
+    <section id="phaseRecommend" class="hidden card p-4 space-y-3">
+      <div class="flex items-center justify-between">
+        <h2 class="font-display text-2xl">RECOMMENDED</h2>
+        <span class="text-xs text-slate-400">New &amp; picks for you</span>
+      </div>
+      <div class="relative">
+        <button id="recPrev" type="button" class="rec-nav rec-prev" aria-label="Scroll recommendations left">
+          <i class="fa-solid fa-chevron-left"></i>
+        </button>
+        <div id="recTrack" class="rec-track" role="list" aria-label="Recommended movies"></div>
+        <button id="recNext" type="button" class="rec-nav rec-next" aria-label="Scroll recommendations right">
+          <i class="fa-solid fa-chevron-right"></i>
+        </button>
+      </div>
+      <p id="recEmpty" class="hidden text-sm text-slate-500 italic">
+        Rate a few movies in your History to personalise these recommendations.
+      </p>
+    </section>
+
     <!-- ===================== PHASE 1: NOMINATIONS ===================== -->
     <section id="phaseNominate" class="card p-4 space-y-4">
       <div class="flex items-center justify-between">
@@ -413,7 +458,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.1</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 1.2</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -1329,6 +1374,7 @@
     renderPeers();
     renderPhase();
     renderMovies();
+    renderRecommendations();
     updateBackground();
     renderNameField();
     renderBallotIfNeeded();
@@ -1714,6 +1760,195 @@
     input.addEventListener('focus', () => {
       if (input.value.trim()) { taMatches = searchMovies(input.value); renderSuggestions(); }
     });
+  }
+
+  // ======================================================================
+  //  RECOMMENDATION ENGINE  (modular — swap `scoreCandidate` to change logic)
+  // ======================================================================
+  // Surfaces a carousel of suggestions above the NOMINATE section. It blends two
+  // intents: brand-new releases and personalised unwatched picks derived from the
+  // viewer's saved ratings. The whole thing is a progressive enhancement: with no
+  // catalogue (movies.json) or no ratings it gracefully falls back to popular /
+  // recent films.
+  //
+  // The scoring is intentionally isolated so it is easy to replace later:
+  //   • REC_CONFIG          — tunable weights / sizes in one place.
+  //   • buildTasteProfile() — turns the watched list into genre affinities.
+  //   • scoreCandidate()    — the swappable ranking function (pure given inputs).
+  //   • blendRecommendations() — guarantees a mix of "new" and personalised picks.
+  // Replace any one of these without touching the rendering code below.
+  const REC_CONFIG = {
+    maxResults: 18,                                  // cards shown in the carousel
+    newSinceYear: new Date().getFullYear() - 2,      // a film is "new" if year >= this
+    newFraction: 0.4,                                // target share of recent releases
+    weights: { genre: 1.0, quality: 1.2 },
+  };
+
+  const isNewMovie = (m) => !!(m && m.year && m.year >= REC_CONFIG.newSinceYear);
+
+  const movieGenres = (m) =>
+    (m && m.genres && m.genres.length ? m.genres : (m && m.primaryGenre ? [m.primaryGenre] : []));
+
+  // Build a lightweight taste profile from the viewer's watched + rated movies.
+  // Each genre accumulates weight from the films it appears in: rated titles push
+  // their genres up (rating > 2.5) or down (rating < 2.5), while merely-watched
+  // titles contribute a small positive signal. Returns genre affinity weights.
+  function buildTasteProfile() {
+    const genreWeights = new Map();
+    const watched = loadWatched();
+    let rated = 0;
+    watched.forEach((w) => {
+      const meta = movieMeta(w.title);
+      if (!meta) return;
+      const r = w.rating || 0;
+      const weight = r ? (r - 2.5) : 0.5;   // 0 = unrated → mild positive
+      if (r) rated += 1;
+      movieGenres(meta).forEach((g) => genreWeights.set(g, (genreWeights.get(g) || 0) + weight));
+    });
+    return { genreWeights, watchedCount: watched.length, ratedCount: rated };
+  }
+
+  // Quality signal in roughly 0..1, averaged across whichever ratings exist.
+  function qualityScore(m) {
+    const r = (m && m.ratings) || {};
+    let sum = 0, n = 0;
+    if (r.imdb != null) { sum += Math.max(0, Math.min(1, r.imdb / 10)); n += 1; }
+    if (r.rottenTomatoes != null) { sum += Math.max(0, Math.min(1, r.rottenTomatoes / 100)); n += 1; }
+    if (r.letterboxd != null) { sum += Math.max(0, Math.min(1, r.letterboxd / 5)); n += 1; }
+    return n ? sum / n : 0.5;
+  }
+
+  // The swappable ranking function. Given a candidate movie and the viewer's taste
+  // profile, return a single comparable "how much they'll enjoy it" score. It is
+  // deliberately year-agnostic: recency is handled separately by the blend step so
+  // older gems that match the viewer's taste are not unfairly buried.
+  function scoreCandidate(m, profile) {
+    const w = REC_CONFIG.weights;
+    const genreScore = movieGenres(m).reduce((acc, g) => acc + (profile.genreWeights.get(g) || 0), 0);
+    return w.genre * genreScore + w.quality * qualityScore(m);
+  }
+
+  // Blend the two recommendation intents into one carousel order: brand-new
+  // releases and personalised picks of any vintage. We interleave a "new" bucket
+  // (up to `newFraction` of the slots) with the overall top picks so the viewer
+  // always sees a mix of fresh releases and unwatched films matched to their taste.
+  function blendRecommendations(ranked, max) {
+    const newTarget = Math.round(max * REC_CONFIG.newFraction);
+    const newRanked = ranked.filter((r) => r.isNew);
+    const out = [];
+    const used = new Set();
+    let ni = 0, pi = 0;
+    while (out.length < max && (ni < newRanked.length || pi < ranked.length)) {
+      const wantNew = out.filter((r) => r.isNew).length < newTarget;
+      let pick = null;
+      if (wantNew) {
+        while (ni < newRanked.length && used.has(newRanked[ni].movie)) ni++;
+        if (ni < newRanked.length) pick = newRanked[ni++];
+      }
+      if (!pick) {
+        while (pi < ranked.length && used.has(ranked[pi].movie)) pi++;
+        if (pi < ranked.length) pick = ranked[pi++];
+      }
+      if (!pick) break;
+      used.add(pick.movie);
+      out.push(pick);
+    }
+    return out;
+  }
+
+  // Score the whole catalogue (excluding watched + already-nominated titles) and
+  // return a blended, ranked list of { movie, score, isNew } recommendation rows.
+  function computeRecommendations() {
+    if (!MOVIE_DB.length) return [];
+    const profile = buildTasteProfile();
+    const watchedSet = new Set(loadWatched().map((w) => normTitle(w.title)));
+    const nominatedSet = new Set(state.movies.map((m) => normTitle(m.title)));
+    const candidates = [];
+    for (const m of MOVIE_DB) {
+      if (!m || !m.title || !m.art) continue;             // need art for a card
+      const nt = normTitle(m.title);
+      if (watchedSet.has(nt) || nominatedSet.has(nt)) continue;
+      candidates.push({ movie: m, score: scoreCandidate(m, profile), isNew: isNewMovie(m) });
+    }
+    candidates.sort((a, b) => b.score - a.score);
+    return blendRecommendations(candidates, REC_CONFIG.maxResults);
+  }
+
+  // Recommendations only change when the catalogue, the watched/rated list or the
+  // current nominations change, so memoise to avoid rescoring on every render.
+  let recCache = { sig: null, list: [] };
+  function recSignature() {
+    const w = loadWatched().map((x) => normTitle(x.title) + ':' + (x.rating || 0)).join('|');
+    const noms = state.movies.map((m) => normTitle(m.title)).join('|');
+    return MOVIE_DB.length + '#' + w + '#' + noms;
+  }
+  function getRecommendations() {
+    const sig = recSignature();
+    if (recCache.sig !== sig) recCache = { sig, list: computeRecommendations() };
+    return recCache.list;
+  }
+
+  // ---- Recommendation carousel rendering ----
+  function recCardHtml(rec, canNominate) {
+    const m = rec.movie;
+    const ratings = ratingsLine(m);
+    const lang = languageBadgeHtml(m);
+    const seen = seenIndicatorHtml(m.title);
+    const safeTitle = escapeHtml(m.title);
+    return `
+      <div class="rec-card" role="listitem">
+        <div class="relative">
+          ${posterHtml(m, 'rec-poster')}
+          ${rec.isNew ? '<span class="rec-badge">NEW</span>' : ''}
+        </div>
+        <div class="p-2 flex flex-col gap-1 flex-1">
+          <div class="rec-title text-xs font-medium leading-snug">${safeTitle}${m.year ? ` <span class="text-slate-500">(${escapeHtml(String(m.year))})</span>` : ''}</div>
+          ${seen || lang ? `<div class="flex items-center gap-1 flex-wrap text-[11px]">${seen}${lang}</div>` : ''}
+          ${ratings ? `<div class="text-[10px] text-slate-400 truncate">${ratings}</div>` : ''}
+          <button class="rec-nominate btn mt-auto w-full text-xs font-semibold py-1.5 rounded-lg ${canNominate ? 'btn-primary text-white' : 'opacity-40 cursor-not-allowed'}"
+                  data-title="${safeTitle}" ${canNominate ? '' : 'disabled'}>
+            <i class="fa-solid fa-plus mr-1"></i>Nominate
+          </button>
+        </div>
+      </div>`;
+  }
+
+  function renderRecommendations() {
+    const section = $('#phaseRecommend');
+    const track = $('#recTrack');
+    const empty = $('#recEmpty');
+    if (!section || !track) return;
+
+    // Only relevant while nominating; never show without a catalogue to draw from.
+    if (state.phase !== 'lobby' || !MOVIE_DB.length) { section.classList.add('hidden'); return; }
+
+    const recs = getRecommendations();
+    section.classList.remove('hidden');
+
+    if (!recs.length) {
+      track.innerHTML = '';
+      empty.classList.remove('hidden');
+      return;
+    }
+    empty.classList.add('hidden');
+
+    const mine = state.movies.filter((m) => m.by === myId).length;
+    const canNominate = mine < MAX_NOMINATIONS;
+    track.innerHTML = recs.map((rec) => recCardHtml(rec, canNominate)).join('');
+    wireSeenIndicator(track);
+    track.querySelectorAll('.rec-nominate').forEach((btn) => {
+      if (btn.disabled) return;
+      btn.addEventListener('click', () => dispatch({ type: 'nominate', title: btn.dataset.title }));
+    });
+  }
+
+  // Prev/next buttons nudge the carousel by roughly one card-width.
+  function wireRecommendationNav() {
+    const track = $('#recTrack');
+    const scrollBy = (dir) => { if (track) track.scrollBy({ left: dir * 320, behavior: 'smooth' }); };
+    const prev = $('#recPrev'), next = $('#recNext');
+    if (prev) prev.addEventListener('click', () => scrollBy(-1));
+    if (next) next.addEventListener('click', () => scrollBy(1));
   }
 
   // ---- Phase 2: drag-and-drop / arrow ranking ballot ----
@@ -2776,6 +3011,7 @@
 
     // ---- Recommendation typeahead on the nominate input ----
     wireTypeahead();
+    wireRecommendationNav();
 
     // ---- History view toggle ----
     $('#historyBtn').addEventListener('click', () => showView(currentView === 'history' ? 'main' : 'history'));
