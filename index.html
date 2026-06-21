@@ -531,7 +531,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 6</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 7</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -2701,11 +2701,9 @@
   let recPrecompute = { sig: null, ranked: null, batches: [] };
   function recSignature() {
     const w    = loadWatched().map((x) => normTitle(x.title) + ':' + (x.rating || 0)).join('|');
-    const noms = state.movies.map((m) => normTitle(m.title)).join('|');
     const hist = loadHistory().length;
-    // Training stores re-rank recs: watchlist (with order), interest levels and
+    // Training stores re-rank recs: interest levels and
     // not-interested marks all reshape the taste vector and candidate set.
-    const wl   = loadWatchlist().map((x) => normTitle(x.title)).join('|');
     const intr = loadInterested().map((x) => normTitle(x.title) + ':' + (x.interest || 0)).join('|');
     const ni   = loadNotInterested().map((x) => normTitle(x.title)).join('|');
     // Group-taste inputs: peers' shared seen lists + their taste vectors, plus
@@ -2716,8 +2714,8 @@
     const pv = (state && state.peerVectors) || {};
     const pvSig = Object.keys(pv).sort().join('|');
     const embReady = window.EMBEDDINGS_BUFFER ? '1' : '0';
-    return MOVIE_DB.length + '#' + w + '#' + noms + '#' + hist
-         + '#' + wl + '#' + intr + '#' + ni
+    return MOVIE_DB.length + '#' + w + '#' + hist
+         + '#' + intr + '#' + ni
          + '#' + seenSig + '#' + pvSig + '#' + embReady;
   }
 
@@ -2761,8 +2759,8 @@
 
   // Ensure the precompute cache matches the current signature, (re)scoring the
   // catalogue once when the signature changes.
-  function ensurePrecompute(sig, profile = null) {
-    if (recPrecompute.sig !== sig) {
+  function ensurePrecompute(sig, profile = null, forceRecompute = false) {
+    if (forceRecompute || recPrecompute.sig !== sig) {
       if (!profile) profile = buildTasteProfile();
       recPrecompute = { sig, ranked: computeRecommendations(MOVIE_DB.length, profile), batches: [] };
     }
@@ -2793,7 +2791,7 @@
     const sig = recSignature();
     if (forceRefresh || recCache.sig !== sig) {
       const profile = buildTasteProfile();
-      const pc = ensurePrecompute(sig, profile);
+      const pc = ensurePrecompute(sig, profile, forceRefresh);
       // Serve a precomputed batch instantly when one is queued; otherwise carve
       // the next batch synchronously.
       const list = pc.batches.length ? pc.batches.shift() : nextRecBatch(pc.ranked, profile);
@@ -3260,14 +3258,85 @@
     });
   }
 
+  function checkAndAppendRecs(dir) {
+    const track = $('#recTrack');
+    if (!track) return;
+    let shouldAppend = false;
+    if (dir > 0) {
+      if (track.scrollLeft + track.clientWidth >= track.scrollWidth - 25) {
+        shouldAppend = true;
+      }
+    } else {
+      if (track.scrollLeft <= 25) {
+        shouldAppend = true;
+      }
+    }
+    if (shouldAppend) {
+      const profile = buildTasteProfile();
+      const pc = ensurePrecompute(recCache.sig || recSignature(), profile);
+      const nextBatch = pc.batches.length ? pc.batches.shift() : nextRecBatch(pc.ranked, profile);
+      if (nextBatch && nextBatch.length) {
+        recCache.list = recCache.list.concat(nextBatch);
+        const mine = state.movies.filter((m) => m.by === myId).length;
+        const canNominate = mine < MAX_NOMINATIONS;
+        const tempDiv = document.createElement('div');
+        tempDiv.innerHTML = nextBatch.map((rec) => recCardHtml(rec, canNominate)).join('');
+        wireSeenIndicator(tempDiv);
+        wireRecommendationWhyPopovers(tempDiv);
+        tempDiv.querySelectorAll('.rec-nominate').forEach((btn) => {
+          if (btn.disabled) return;
+          btn.addEventListener('click', () => dispatch({ type: 'nominate', title: btn.dataset.title }));
+        });
+        tempDiv.querySelectorAll('.rec-watchlist').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const title = btn.dataset.title;
+            if (inWatchlist(title)) {
+              removeFromWatchlistSilent(title);
+              btn.setAttribute('aria-pressed', 'false');
+              btn.className = 'rec-watchlist btn w-full text-xs font-semibold py-1.5 rounded-lg bg-panel2 border border-line text-slate-300';
+              btn.innerHTML = '<i class="fa-regular fa-bookmark mr-1"></i>Add to Watchlist';
+            } else {
+              addToWatchlistSilent(title);
+              btn.setAttribute('aria-pressed', 'true');
+              btn.className = 'rec-watchlist btn w-full text-xs font-semibold py-1.5 rounded-lg bg-panel2 border border-emerald-500/40 text-emerald-300';
+              btn.innerHTML = '<i class="fa-solid fa-bookmark mr-1"></i>Added to Watchlist';
+            }
+          });
+        });
+        tempDiv.querySelectorAll('.rec-card').forEach((card) => {
+          card.addEventListener('click', (e) => {
+            if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-why-wrap')) return;
+            openRecommendationDetail(card.dataset.title || '');
+          });
+          card.addEventListener('keydown', (e) => {
+            if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-why-wrap')) return;
+            e.preventDefault();
+            openRecommendationDetail(card.dataset.title || '');
+          });
+        });
+        while (tempDiv.firstChild) {
+          track.appendChild(tempDiv.firstChild);
+        }
+        schedulePrecompute();
+      }
+    }
+  }
+
   // Prev/next buttons nudge the carousel by roughly one card-width.
   function wireRecommendationNav() {
     const track = $('#recTrack');
     const scrollBy = (dir) => { if (track) track.scrollBy({ left: dir * 320, behavior: 'smooth' }); };
     const prev = $('#recPrev'), next = $('#recNext');
     const refresh = $('#recRefreshBtn');
-    if (prev) prev.addEventListener('click', () => scrollBy(-1));
-    if (next) next.addEventListener('click', () => scrollBy(1));
+    if (prev) prev.addEventListener('click', () => {
+      checkAndAppendRecs(-1);
+      scrollBy(-1);
+    });
+    if (next) next.addEventListener('click', () => {
+      checkAndAppendRecs(1);
+      scrollBy(1);
+    });
     if (refresh) refresh.addEventListener('click', () => refreshRecommendations());
   }
 
