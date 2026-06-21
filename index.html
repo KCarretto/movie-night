@@ -531,7 +531,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 5</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 6</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -647,6 +647,9 @@
         </button>
         <button id="trainAddWatchlist" class="btn btn-primary text-white text-sm font-semibold py-2.5 rounded-lg">
           <i class="fa-regular fa-bookmark mr-1"></i>Add to Watchlist
+        </button>
+        <button id="trainNotSure" class="btn text-sm font-semibold py-2.5 rounded-lg bg-panel2 border border-line text-slate-300 col-span-2">
+          <i class="fa-regular fa-circle-question mr-1"></i>I'm not sure
         </button>
       </div>
       <p id="trainEmpty" class="hidden text-sm text-slate-500 italic">No more movies to train on right now — come back after rating a few.</p>
@@ -1038,6 +1041,7 @@
   const WATCHLIST_KEY = 'movieNightWatchlist';
   const INTERESTED_KEY = 'movieNightInterested';
   const NOT_INTERESTED_KEY = 'movieNightNotInterested';
+  const NOT_SURE_KEY = 'movieNightNotSure';
 
   function loadJson(key, fallback) {
     try { const v = JSON.parse(localStorage.getItem(key) || 'null'); return v == null ? fallback : v; }
@@ -1108,9 +1112,22 @@
     saveWatchlist(list);
     afterTasteChange();
   }
+  function addToWatchlistSilent(title) {
+    const clean = String(title || '').trim();
+    if (!clean) return;
+    const list = loadWatchlist();
+    if (list.some((w) => normTitle(w.title) === normTitle(clean))) return;
+    list.push({ title: clean, addedAt: Date.now() });
+    saveWatchlist(list);
+    shareVector();
+  }
   function removeFromWatchlist(title) {
     saveWatchlist(loadWatchlist().filter((w) => normTitle(w.title) !== normTitle(title)));
     afterTasteChange();
+  }
+  function removeFromWatchlistSilent(title) {
+    saveWatchlist(loadWatchlist().filter((w) => normTitle(w.title) !== normTitle(title)));
+    shareVector();
   }
 
   // Interested: [{ title, interest (1-5), at }] — "how interested" ratings from
@@ -1139,6 +1156,21 @@
     if (!list.some((w) => normTitle(w.title) === normTitle(clean))) {
       list.push({ title: clean, at: Date.now() });
       saveNotInterested(list);
+    }
+    afterTasteChange();
+  }
+
+  // I'm not sure: [{ title, at }] — titles the user skipped with "I'm not sure" in training.
+  // Hides the title from the training flow only.
+  function loadNotSure() { const v = loadJson(NOT_SURE_KEY, []); return Array.isArray(v) ? v : []; }
+  function saveNotSure(list) { saveJson(NOT_SURE_KEY, list); }
+  function markNotSure(title) {
+    const clean = String(title || '').trim();
+    if (!clean) return;
+    const list = loadNotSure();
+    if (!list.some((w) => normTitle(w.title) === normTitle(clean))) {
+      list.push({ title: clean, at: Date.now() });
+      saveNotSure(list);
     }
     afterTasteChange();
   }
@@ -2487,8 +2519,7 @@
   }
 
   // ---------- candidate scoring ----------
-  // Given a catalogue entry and a taste profile, return { score, why } where
-  // `why` is a short human-readable justification for the carousel badge.
+  // Given a catalogue entry and a taste profile, return the score.
   // Year-agnostic — recency is handled by the blend step so vintage classics that
   // perfectly match the viewer's taste are never unfairly buried.
   function scoreCandidate(m, profile) {
@@ -2525,8 +2556,19 @@
       score -= 0.5 * dislikeAlign;
     }
 
-    // Identify the dominant scoring factor for an explainable badge. Find the
-    // single past favourite whose embedding best matches this candidate.
+    return score;
+  }
+
+  // Identify the dominant scoring factor for an explainable badge. Find the
+  // single past favourite whose embedding best matches this candidate.
+  // Calculated on-demand for final selected recommendation batches.
+  function computeRecommendationWhy(m, profile) {
+    const w   = REC_CONFIG.weights;
+    const genres = movieGenres(m);
+    const gen = genres.reduce((s, g) => s + (profile.genreWeights.get(g) || 0), 0) / Math.sqrt(genres.length || 1);
+    const groupCosineScore = groupVibeScore(m, profile);
+    const emb = movieEmbedding(m);
+
     let bestFav = null;
     if (emb && profile.positiveSamples && profile.positiveSamples.length) {
       for (const sample of profile.positiveSamples) {
@@ -2540,12 +2582,9 @@
       { key: 'genre', val: w.genre * Math.max(0, gen) },
     ];
     drivers.sort((a, b) => b.val - a.val);
-    let why;
-    if (drivers[0].key === 'fav' && bestFav) why = '🍿 ' + bestFav.title;
-    else if (drivers[0].key === 'genre' && gen > 0) why = '✨ Fits your genre tastes';
-    else why = '👥 Matches group vibe';
-
-    return { score, why };
+    if (drivers[0].key === 'fav' && bestFav) return '🍿 ' + bestFav.title;
+    if (drivers[0].key === 'genre' && gen > 0) return '✨ Fits your genre tastes';
+    return '👥 Matches group vibe';
   }
 
   // Cold-start score: quality + small recency boost; no personalisation.
@@ -2607,9 +2646,9 @@
   // ---------- main entry point ----------
   // Score the whole catalogue (excluding watched + already-nominated titles) and
   // return a blended, ranked list of { movie, score, why, isNew, personalised } rows.
-  function computeRecommendations(maxResults = REC_CONFIG.maxResults) {
+  function computeRecommendations(maxResults = REC_CONFIG.maxResults, profile = null) {
     if (!MOVIE_DB.length) return [];
-    const profile      = buildTasteProfile();
+    if (!profile) profile = buildTasteProfile();
     const personalised = profile.hasSignal;
     // "Seen It" filter: drop any title that ANY participant (local user or any
     // peer) has already watched/seen, so the room only weighs movies that are
@@ -2627,9 +2666,7 @@
       if (seenSet.has(nt) || nominatedSet.has(nt) || skipSet.has(nt)) continue;
       let score, why = null;
       if (personalised) {
-        const res = scoreCandidate(m, profile);
-        score = res.score;
-        why = res.why;
+        score = scoreCandidate(m, profile);
       } else {
         score = coldStartScore(m);
       }
@@ -2688,7 +2725,7 @@
   // seen for this session so subsequent batches don't repeat them. Reserves a
   // few slots for watchlist titles so saved movies are periodically injected
   // into the active feed rather than relying purely on their organic rank.
-  function nextRecBatch(ranked) {
+  function nextRecBatch(ranked, profile = null) {
     const seen = loadSeenRecommendations();
     const unseen = ranked.filter((rec) => !seen.has(normTitle(rec.movie.title)));
     const reserve = Math.max(1, Math.round(REC_CONFIG.maxResults * REC_CONFIG.watchlistInjectFraction));
@@ -2710,14 +2747,24 @@
     const final = batch.slice(0, REC_CONFIG.maxResults);
     final.forEach((rec) => seen.add(normTitle(rec.movie.title)));
     saveSeenRecommendations(seen);
+
+    // Compute 'why' only for the final recommendations in this batch
+    if (profile === null) profile = buildTasteProfile();
+    final.forEach((rec) => {
+      if (!rec.why && rec.personalised) {
+        rec.why = computeRecommendationWhy(rec.movie, profile);
+      }
+    });
+
     return final;
   }
 
   // Ensure the precompute cache matches the current signature, (re)scoring the
   // catalogue once when the signature changes.
-  function ensurePrecompute(sig) {
+  function ensurePrecompute(sig, profile = null) {
     if (recPrecompute.sig !== sig) {
-      recPrecompute = { sig, ranked: computeRecommendations(MOVIE_DB.length), batches: [] };
+      if (!profile) profile = buildTasteProfile();
+      recPrecompute = { sig, ranked: computeRecommendations(MOVIE_DB.length, profile), batches: [] };
     }
     return recPrecompute;
   }
@@ -2726,9 +2773,10 @@
   // renders from a ready queue instead of blocking on a fresh scoring pass.
   function precomputeRecBatches(count = 2) {
     const sig = recSignature();
-    const pc = ensurePrecompute(sig);
+    const profile = buildTasteProfile();
+    const pc = ensurePrecompute(sig, profile);
     while (pc.batches.length < count) {
-      const batch = nextRecBatch(pc.ranked);
+      const batch = nextRecBatch(pc.ranked, profile);
       if (!batch.length) break;       // exhausted the unseen catalogue
       pc.batches.push(batch);
     }
@@ -2744,10 +2792,11 @@
     const forceRefresh = !!options.forceRefresh;
     const sig = recSignature();
     if (forceRefresh || recCache.sig !== sig) {
-      const pc = ensurePrecompute(sig);
+      const profile = buildTasteProfile();
+      const pc = ensurePrecompute(sig, profile);
       // Serve a precomputed batch instantly when one is queued; otherwise carve
       // the next batch synchronously.
-      const list = pc.batches.length ? pc.batches.shift() : nextRecBatch(pc.ranked);
+      const list = pc.batches.length ? pc.batches.shift() : nextRecBatch(pc.ranked, profile);
       recCache = {
         sig,
         list,
@@ -2792,7 +2841,7 @@
             </button>
             <button class="rec-watchlist btn w-full text-xs font-semibold py-1.5 rounded-lg bg-panel2 border border-line ${onList ? 'text-emerald-300 border-emerald-500/40' : 'text-slate-300'}"
                     data-title="${safeTitle}" aria-pressed="${onList ? 'true' : 'false'}">
-              <i class="fa-${onList ? 'solid' : 'regular'} fa-bookmark mr-1"></i>${onList ? 'On watchlist' : 'Add to Watchlist'}
+              <i class="fa-${onList ? 'solid' : 'regular'} fa-bookmark mr-1"></i>${onList ? 'Added to Watchlist' : 'Add to Watchlist'}
             </button>
           </div>
         </div>
@@ -2940,8 +2989,17 @@
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
         const title = btn.dataset.title;
-        if (inWatchlist(title)) removeFromWatchlist(title);
-        else addToWatchlist(title);
+        if (inWatchlist(title)) {
+          removeFromWatchlistSilent(title);
+          btn.setAttribute('aria-pressed', 'false');
+          btn.className = 'rec-watchlist btn w-full text-xs font-semibold py-1.5 rounded-lg bg-panel2 border border-line text-slate-300';
+          btn.innerHTML = '<i class="fa-regular fa-bookmark mr-1"></i>Add to Watchlist';
+        } else {
+          addToWatchlistSilent(title);
+          btn.setAttribute('aria-pressed', 'true');
+          btn.className = 'rec-watchlist btn w-full text-xs font-semibold py-1.5 rounded-lg bg-panel2 border border-emerald-500/40 text-emerald-300';
+          btn.innerHTML = '<i class="fa-solid fa-bookmark mr-1"></i>Added to Watchlist';
+        }
       });
     });
     track.querySelectorAll('.rec-card').forEach((card) => {
@@ -2998,6 +3056,7 @@
       ...loadWatchlist().map((x) => normTitle(x.title)),
       ...loadInterested().map((x) => normTitle(x.title)),
       ...loadNotInterested().map((x) => normTitle(x.title)),
+      ...loadNotSure().map((x) => normTitle(x.title)),
     ]);
     const ranked = computeRecommendations(Math.max(60, REC_CONFIG.maxResults * 3));
     return ranked.map((r) => r.movie).filter((m) => m && !acted.has(normTitle(m.title)));
@@ -3180,6 +3239,12 @@
     if (addWatchlist) addWatchlist.addEventListener('click', () => {
       if (!trainCurrent) return;
       addToWatchlist(trainCurrent.title);
+      trainNext();
+    });
+    const notSure = $('#trainNotSure');
+    if (notSure) notSure.addEventListener('click', () => {
+      if (!trainCurrent) return;
+      markNotSure(trainCurrent.title);
       trainNext();
     });
     const cancelRate = $('#trainRateCancel');
@@ -3881,6 +3946,7 @@
     localStorage.removeItem(WATCHLIST_KEY);
     localStorage.removeItem(INTERESTED_KEY);
     localStorage.removeItem(NOT_INTERESTED_KEY);
+    localStorage.removeItem(NOT_SURE_KEY);
     trainQueue = [];
     trainCurrent = null;
     trainPrerenderedCardHtml = null;
@@ -3897,6 +3963,7 @@
     localStorage.removeItem(WATCHLIST_KEY);
     localStorage.removeItem(INTERESTED_KEY);
     localStorage.removeItem(NOT_INTERESTED_KEY);
+    localStorage.removeItem(NOT_SURE_KEY);
     try { sessionStorage.removeItem(HOST_ROOM_KEY); } catch (e) {}
     try { sessionStorage.removeItem(REC_SESSION_SEEN_KEY); } catch (e) {}
     window.location.reload();
