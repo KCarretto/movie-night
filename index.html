@@ -275,7 +275,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.2</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 0.3</b>
   </footer>
 
   <!-- ===================== START-VOTING CONFIRM MODAL ===================== -->
@@ -833,15 +833,24 @@
       return { winnerId: null, winnerTitle: null, rounds: [], totalBallots: 0 };
     }
 
-    // Pre-calculate genuine first-preference tallies so ties can be broken by
-    // each candidate's first-round support (not by an arbitrary later round).
+    // Pre-calculate static tie-breaker metrics by iterating the ballots once:
+    //  - firstRoundTally: genuine 1st-place votes each movie received, used as
+    //    the first tie-breaker so ties are settled by first-round support.
+    //  - weightedScore: a Borda-style score awarding points by ballot position
+    //    (reverse index), used as the second tie-breaker.
     const firstRoundTally = {};
-    movies.forEach((m) => { firstRoundTally[m.id] = 0; });
+    const weightedScore = {};
+    movies.forEach((m) => { firstRoundTally[m.id] = 0; weightedScore[m.id] = 0; });
     ballots.forEach((b) => {
       const first = b.ranking[0];
       if (first !== undefined && firstRoundTally[first] !== undefined) {
         firstRoundTally[first]++;
       }
+      b.ranking.forEach((id, index) => {
+        if (weightedScore[id] !== undefined) {
+          weightedScore[id] += b.ranking.length - index;
+        }
+      });
     });
 
     // Safety bound: at most one elimination per candidate.
@@ -887,14 +896,27 @@
       }
 
       // Otherwise eliminate exactly one candidate: the lowest scorer. If several
-      // candidates tie for last, break the tie using genuine first-round tallies
+      // candidates tie for last, apply a deterministic, multi-tiered tie-breaker
       // and remove only the single worst performer so the next round can
       // redistribute that candidate's ballots correctly.
       const lowest = entries[entries.length - 1][1];
       let losers = entries.filter(([, n]) => n === lowest).map(([id]) => id);
       if (losers.length > 1) {
-        // Tie for last → order by fewest genuine first-preference votes.
-        losers.sort((a, b) => firstRoundTally[a] - firstRoundTally[b]);
+        // Tiebreaker 1 (Look-Back): keep only candidates with the lowest
+        // genuine first-preference tally.
+        const minTally = Math.min(...losers.map((id) => firstRoundTally[id]));
+        losers = losers.filter((id) => firstRoundTally[id] === minTally);
+      }
+      if (losers.length > 1) {
+        // Tiebreaker 2 (Weighted Score): keep only candidates with the lowest
+        // Borda-style weighted score.
+        const minScore = Math.min(...losers.map((id) => weightedScore[id]));
+        losers = losers.filter((id) => weightedScore[id] === minScore);
+      }
+      if (losers.length > 1) {
+        // Tiebreaker 3 (Deterministic Fallback): break any remaining perfect tie
+        // by sorting alphabetically by movie ID so results stay predictable.
+        losers.sort((a, b) => String(a).localeCompare(String(b)));
       }
       // Enforce single elimination: only the single worst-performing candidate.
       losers = [losers[0]];
