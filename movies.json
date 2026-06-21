@@ -1,0 +1,347 @@
+{
+  "comment": "Movie recommendation database for Movie Night. Critic ratings: letterboxd is out of 5 (average rating), rottenTomatoes is the Tomatometer percentage, imdb is out of 10. art is a poster image URL (TMDB CDN) with a graceful in-app fallback if it fails to load.",
+  "movies": [
+    {
+      "title": "The Shawshank Redemption",
+      "year": 1994,
+      "primaryGenre": "Drama",
+      "genres": ["Drama", "Crime"],
+      "description": "Two imprisoned men bond over years, finding solace and eventual redemption through acts of common decency.",
+      "art": "https://image.tmdb.org/t/p/w342/q6y0Go1tsGEsmtFryDOJo3dEmqu.jpg",
+      "ratings": { "letterboxd": 4.5, "rottenTomatoes": 89, "imdb": 9.3 }
+    },
+    {
+      "title": "The Godfather",
+      "year": 1972,
+      "primaryGenre": "Crime",
+      "genres": ["Crime", "Drama"],
+      "description": "The aging patriarch of an organized crime dynasty transfers control of his clandestine empire to his reluctant son.",
+      "art": "https://image.tmdb.org/t/p/w342/3bhkrj58Vtu7enYsRolD1fZdja1.jpg",
+      "ratings": { "letterboxd": 4.6, "rottenTomatoes": 97, "imdb": 9.2 }
+    },
+    {
+      "title": "Pulp Fiction",
+      "year": 1994,
+      "primaryGenre": "Crime",
+      "genres": ["Crime", "Drama", "Thriller"],
+      "description": "The lives of two mob hitmen, a boxer, and a pair of diner bandits intertwine in four tales of violence and redemption.",
+      "art": "https://image.tmdb.org/t/p/w342/d5iIlFn5s0ImszYzBPb8JPIfbXD.jpg",
+      "ratings": { "letterboxd": 4.3, "rottenTomatoes": 92, "imdb": 8.9 }
+    },
+    {
+      "title": "The Dark Knight",
+      "year": 2008,
+      "primaryGenre": "Action",
+      "genres": ["Action", "Crime", "Drama", "Thriller"],
+      "description": "Batman raises the stakes in his war on crime as he faces the Joker, an agent of chaos bent on testing Gotham.",
+      "art": "https://image.tmdb.org/t/p/w342/qJ2tW6WMUDux911r6m7haRef0WH.jpg",
+      "ratings": { "letterboxd": 4.4, "rottenTomatoes": 94, "imdb": 9.0 }
+    },
+    {
+      "title": "Inception",
+      "year": 2010,
+      "primaryGenre": "Sci-Fi",
+      "genres": ["Sci-Fi", "Action", "Thriller"],
+      "description": "A thief who steals corporate secrets through dream-sharing technology is given the inverse task of planting an idea.",
+      "art": "https://image.tmdb.org/t/p/w342/oYuLEt3zVCKq57qu2F8dT7NIa6f.jpg",
+      "ratings": { "letterboxd": 4.2, "rottenTomatoes": 87, "imdb": 8.8 }
+    },
+    {
+      "title": "Parasite",
+      "year": 2019,
+      "primaryGenre": "Thriller",
+      "genres": ["Thriller", "Drama", "Comedy"],
+      "description": "Greed and class discrimination threaten the newly formed symbiotic relationship between the wealthy Parks and the destitute Kims.",
+      "art": "https://image.tmdb.org/t/p/w342/7IiTTgloJzvGI1TAYymCfbfl3vT.jpg",
+      "ratings": { "letterboxd": 4.5, "rottenTomatoes": 99, "imdb": 8.5 }
+    },
+    {
+      "title": "Spirited Away",
+      "year": 2001,
+      "primaryGenre": "Animation",
+      "genres": ["Animation", "Fantasy", "Family"],
+      "description": "During her family's move, a sullen girl wanders into a world ruled by gods, witches, and spirits where humans become beasts.",
+      "art": "https://image.tmdb.org/t/p/w342/39wmItIWsg5sZMyRUHLkWBcuVCM.jpg",
+      "ratings": { "letterboxd": 4.5, "rottenTomatoes": 97, "imdb": 8.6 }
+    },
+    {
+      "title": "Forrest Gump",
+      "year": 1994,
+      "primaryGenre": "Drama",
+      "genres": ["Drama", "Romance", "Comedy"],
+      "description": "The history of the United States from the 1950s to the 1970s unfolds through the perspective of a slow-witted Alabama man.",
+      "art": "https://image.tmdb.org/t/p/w342/arw2vcBveWOVZr6pxd9XTd1TdQa.jpg",
+      "ratings": { "letterboxd": 4.0, "rottenTomatoes": 74, "imdb": 8.8 }
+    },
+    {
+      "title": "The Matrix",
+      "year": 1999,
+      "primaryGenre": "Sci-Fi",
+      "genres": ["Sci-Fi", "Action"],
+      "description": "A hacker learns from mysterious rebels about the true nature of his reality and his role in the war against its controllers.",
+      "art": "https://image.tmdb.org/t/p/w342/f89U3ADr1oiB1s9GkdPOEpXUk5H.jpg",
+      "ratings": { "letterboxd": 4.2, "rottenTomatoes": 83, "imdb": 8.7 }
+    },
+    {
+      "title": "Interstellar",
+      "year": 2014,
+      "primaryGenre": "Sci-Fi",
+      "genres": ["Sci-Fi", "Adventure", "Drama"],
+      "description": "A team of explorers travel through a wormhole in space in an attempt to ensure humanity's survival.",
+      "art": "https://image.tmdb.org/t/p/w342/gEU2QniE6E77NI6lCU6MxlNBvIx.jpg",
+      "ratings": { "letterboxd": 4.4, "rottenTomatoes": 73, "imdb": 8.7 }
+    },
+    {
+      "title": "Goodfellas",
+      "year": 1990,
+      "primaryGenre": "Crime",
+      "genres": ["Crime", "Drama"],
+      "description": "The story of Henry Hill and his life in the mob, covering his relationship with his wife and his mob partners.",
+      "art": "https://image.tmdb.org/t/p/w342/aKuFiU82s5ISJpGZp7YkIr3kCUd.jpg",
+      "ratings": { "letterboxd": 4.4, "rottenTomatoes": 95, "imdb": 8.7 }
+    },
+    {
+      "title": "Whiplash",
+      "year": 2014,
+      "primaryGenre": "Drama",
+      "genres": ["Drama", "Music"],
+      "description": "A promising young drummer enrolls at a cut-throat music conservatory whose ruthless instructor will stop at nothing.",
+      "art": "https://image.tmdb.org/t/p/w342/7fn624j5lj3xTme2SgiLCeuedmO.jpg",
+      "ratings": { "letterboxd": 4.4, "rottenTomatoes": 94, "imdb": 8.5 }
+    },
+    {
+      "title": "The Grand Budapest Hotel",
+      "year": 2014,
+      "primaryGenre": "Comedy",
+      "genres": ["Comedy", "Drama", "Adventure"],
+      "description": "A legendary concierge and his trusted lobby boy become embroiled in the theft of a priceless painting and a family fortune.",
+      "art": "https://image.tmdb.org/t/p/w342/eWdyYQreja6JGCzqHWXpWHDrrPo.jpg",
+      "ratings": { "letterboxd": 4.3, "rottenTomatoes": 92, "imdb": 8.1 }
+    },
+    {
+      "title": "Mad Max: Fury Road",
+      "year": 2015,
+      "primaryGenre": "Action",
+      "genres": ["Action", "Adventure", "Sci-Fi"],
+      "description": "In a post-apocalyptic wasteland, a woman rebels against a tyrannical ruler in search for her homeland with a group of female prisoners.",
+      "art": "https://image.tmdb.org/t/p/w342/8tZYtuWezp8JbcsvHYO0O46tFbo.jpg",
+      "ratings": { "letterboxd": 4.1, "rottenTomatoes": 97, "imdb": 8.1 }
+    },
+    {
+      "title": "Spider-Man: Into the Spider-Verse",
+      "year": 2018,
+      "primaryGenre": "Animation",
+      "genres": ["Animation", "Action", "Adventure"],
+      "description": "Teen Miles Morales becomes Spider-Man and joins with five counterparts from other dimensions to stop a threat to all realities.",
+      "art": "https://image.tmdb.org/t/p/w342/iiZZdoQBEYBv6id8su7ImL0oCbD.jpg",
+      "ratings": { "letterboxd": 4.4, "rottenTomatoes": 97, "imdb": 8.4 }
+    },
+    {
+      "title": "Get Out",
+      "year": 2017,
+      "primaryGenre": "Horror",
+      "genres": ["Horror", "Thriller", "Mystery"],
+      "description": "A young Black man visits his white girlfriend's family estate and uncovers a disturbing secret.",
+      "art": "https://image.tmdb.org/t/p/w342/tFXcEccSQMf3lfhfXKSU9iRBpa3.jpg",
+      "ratings": { "letterboxd": 4.0, "rottenTomatoes": 98, "imdb": 7.8 }
+    },
+    {
+      "title": "La La Land",
+      "year": 2016,
+      "primaryGenre": "Romance",
+      "genres": ["Romance", "Drama", "Music"],
+      "description": "A jazz pianist and an aspiring actress fall in love while pursuing their dreams in Los Angeles.",
+      "art": "https://image.tmdb.org/t/p/w342/uDO8zWDhfWwoFdKS4fzkUJt0Rf0.jpg",
+      "ratings": { "letterboxd": 4.0, "rottenTomatoes": 91, "imdb": 8.0 }
+    },
+    {
+      "title": "The Lord of the Rings: The Fellowship of the Ring",
+      "year": 2001,
+      "primaryGenre": "Fantasy",
+      "genres": ["Fantasy", "Adventure", "Action"],
+      "description": "A meek Hobbit and eight companions set out on a journey to destroy the One Ring and the dark lord Sauron.",
+      "art": "https://image.tmdb.org/t/p/w342/6oom5QYQ2yQTMJIbnvbkBL9cHo6.jpg",
+      "ratings": { "letterboxd": 4.5, "rottenTomatoes": 92, "imdb": 8.9 }
+    },
+    {
+      "title": "Everything Everywhere All at Once",
+      "year": 2022,
+      "primaryGenre": "Sci-Fi",
+      "genres": ["Sci-Fi", "Comedy", "Adventure"],
+      "description": "An aging Chinese immigrant is swept up in an insane adventure where she alone can save existence by exploring other universes.",
+      "art": "https://image.tmdb.org/t/p/w342/w3LxiVYdWWRvEVdn5RYq6jIqkb1.jpg",
+      "ratings": { "letterboxd": 4.3, "rottenTomatoes": 93, "imdb": 7.8 }
+    },
+    {
+      "title": "Coco",
+      "year": 2017,
+      "primaryGenre": "Animation",
+      "genres": ["Animation", "Family", "Fantasy"],
+      "description": "Aspiring musician Miguel enters the Land of the Dead to find his great-great-grandfather, a legendary singer.",
+      "art": "https://image.tmdb.org/t/p/w342/gGEsBPAijhVUFoiNpgZXqRVWJt2.jpg",
+      "ratings": { "letterboxd": 4.1, "rottenTomatoes": 97, "imdb": 8.4 }
+    },
+    {
+      "title": "Knives Out",
+      "year": 2019,
+      "primaryGenre": "Mystery",
+      "genres": ["Mystery", "Comedy", "Crime"],
+      "description": "A detective investigates the death of a patriarch of an eccentric, combative family.",
+      "art": "https://image.tmdb.org/t/p/w342/pThyQovXQrw2m0s9x82twj48Jq4.jpg",
+      "ratings": { "letterboxd": 3.9, "rottenTomatoes": 97, "imdb": 7.9 }
+    },
+    {
+      "title": "Blade Runner 2049",
+      "year": 2017,
+      "primaryGenre": "Sci-Fi",
+      "genres": ["Sci-Fi", "Drama", "Mystery"],
+      "description": "A young blade runner's discovery of a long-buried secret leads him to track down former blade runner Rick Deckard.",
+      "art": "https://image.tmdb.org/t/p/w342/gajva2L0rPYkEWjzgFlBXCAVBE5.jpg",
+      "ratings": { "letterboxd": 4.2, "rottenTomatoes": 88, "imdb": 8.0 }
+    },
+    {
+      "title": "The Lion King",
+      "year": 1994,
+      "primaryGenre": "Animation",
+      "genres": ["Animation", "Family", "Drama"],
+      "description": "A young lion prince flees his kingdom after the murder of his father, only to learn the true meaning of responsibility.",
+      "art": "https://image.tmdb.org/t/p/w342/sKCr78MXSLixwmZ8DyJLrpMsd15.jpg",
+      "ratings": { "letterboxd": 4.0, "rottenTomatoes": 93, "imdb": 8.5 }
+    },
+    {
+      "title": "Alien",
+      "year": 1979,
+      "primaryGenre": "Horror",
+      "genres": ["Horror", "Sci-Fi"],
+      "description": "The crew of a commercial spacecraft encounters a deadly lifeform after investigating an unknown transmission.",
+      "art": "https://image.tmdb.org/t/p/w342/vfrQk5IPloGg1v9Rzbh2Eg3VGyM.jpg",
+      "ratings": { "letterboxd": 4.3, "rottenTomatoes": 93, "imdb": 8.5 }
+    },
+    {
+      "title": "Back to the Future",
+      "year": 1985,
+      "primaryGenre": "Sci-Fi",
+      "genres": ["Sci-Fi", "Adventure", "Comedy"],
+      "description": "A teenager is accidentally sent thirty years into the past in a time-traveling DeLorean built by his eccentric scientist friend.",
+      "art": "https://image.tmdb.org/t/p/w342/fNOH9f1aA7XRTzl1sAOx9iF553Q.jpg",
+      "ratings": { "letterboxd": 4.2, "rottenTomatoes": 93, "imdb": 8.5 }
+    },
+    {
+      "title": "Jurassic Park",
+      "year": 1993,
+      "primaryGenre": "Adventure",
+      "genres": ["Adventure", "Sci-Fi", "Action"],
+      "description": "A pragmatic paleontologist touring an island theme park of cloned dinosaurs is forced to survive when they break loose.",
+      "art": "https://image.tmdb.org/t/p/w342/oU7Oq2kFAAReatXLAtkM0kpc81y.jpg",
+      "ratings": { "letterboxd": 4.0, "rottenTomatoes": 92, "imdb": 8.2 }
+    },
+    {
+      "title": "Toy Story",
+      "year": 1995,
+      "primaryGenre": "Animation",
+      "genres": ["Animation", "Family", "Comedy"],
+      "description": "A cowboy doll is profoundly threatened and jealous when a new spaceman action figure supplants him as top toy.",
+      "art": "https://image.tmdb.org/t/p/w342/uXDfjJbdP4ijW5hWSBrPrlKpxab.jpg",
+      "ratings": { "letterboxd": 3.9, "rottenTomatoes": 100, "imdb": 8.3 }
+    },
+    {
+      "title": "Dune",
+      "year": 2021,
+      "primaryGenre": "Sci-Fi",
+      "genres": ["Sci-Fi", "Adventure", "Drama"],
+      "description": "A gifted young man must travel to the most dangerous planet in the universe to ensure the future of his family and people.",
+      "art": "https://image.tmdb.org/t/p/w342/d5NXSklXo0qyIYkgV94XAgMIckC.jpg",
+      "ratings": { "letterboxd": 4.0, "rottenTomatoes": 83, "imdb": 8.0 }
+    },
+    {
+      "title": "The Silence of the Lambs",
+      "year": 1991,
+      "primaryGenre": "Thriller",
+      "genres": ["Thriller", "Crime", "Horror"],
+      "description": "A young FBI cadet must confide in an incarcerated cannibal killer to catch another serial killer on the loose.",
+      "art": "https://image.tmdb.org/t/p/w342/uS9m8OBk1A8eM9I042bx8XXpqAq.jpg",
+      "ratings": { "letterboxd": 4.3, "rottenTomatoes": 95, "imdb": 8.6 }
+    },
+    {
+      "title": "Spider-Man: No Way Home",
+      "year": 2021,
+      "primaryGenre": "Action",
+      "genres": ["Action", "Adventure", "Sci-Fi"],
+      "description": "Peter Parker's secret identity is revealed, and he asks Doctor Strange for help, fracturing the multiverse.",
+      "art": "https://image.tmdb.org/t/p/w342/1g0dhYtq4irTY1GPXvft6k4YLjm.jpg",
+      "ratings": { "letterboxd": 3.7, "rottenTomatoes": 93, "imdb": 8.2 }
+    },
+    {
+      "title": "Your Name",
+      "year": 2016,
+      "primaryGenre": "Animation",
+      "genres": ["Animation", "Romance", "Fantasy"],
+      "description": "Two strangers find themselves linked in a bizarre way: a city boy and a country girl begin swapping bodies.",
+      "art": "https://image.tmdb.org/t/p/w342/q719jXXEzOoYaps6babgKnONONX.jpg",
+      "ratings": { "letterboxd": 4.1, "rottenTomatoes": 98, "imdb": 8.4 }
+    },
+    {
+      "title": "Casablanca",
+      "year": 1942,
+      "primaryGenre": "Romance",
+      "genres": ["Romance", "Drama"],
+      "description": "A cynical expatriate club owner struggles to decide whether to help his former lover and her husband escape the Nazis.",
+      "art": "https://image.tmdb.org/t/p/w342/5K7cOHoay2mZusSLezBOY0Qxh8a.jpg",
+      "ratings": { "letterboxd": 4.4, "rottenTomatoes": 99, "imdb": 8.5 }
+    },
+    {
+      "title": "The Departed",
+      "year": 2006,
+      "primaryGenre": "Crime",
+      "genres": ["Crime", "Thriller", "Drama"],
+      "description": "An undercover cop and a mole in the police attempt to identify each other while infiltrating an Irish gang in Boston.",
+      "art": "https://image.tmdb.org/t/p/w342/nT97ifVT2J1yMQmeq20Qblg61T.jpg",
+      "ratings": { "letterboxd": 4.2, "rottenTomatoes": 91, "imdb": 8.5 }
+    },
+    {
+      "title": "Up",
+      "year": 2009,
+      "primaryGenre": "Animation",
+      "genres": ["Animation", "Family", "Adventure"],
+      "description": "An elderly widower ties thousands of balloons to his house and flies to South America, inadvertently taking a young stowaway.",
+      "art": "https://image.tmdb.org/t/p/w342/vpbaStTMt8qqXaEgnOR2EE4DIeoljpg.jpg",
+      "ratings": { "letterboxd": 4.0, "rottenTomatoes": 98, "imdb": 8.3 }
+    },
+    {
+      "title": "Oppenheimer",
+      "year": 2023,
+      "primaryGenre": "Drama",
+      "genres": ["Drama", "History", "Thriller"],
+      "description": "The story of J. Robert Oppenheimer and his role in the development of the atomic bomb during World War II.",
+      "art": "https://image.tmdb.org/t/p/w342/8Gxv8gSFCU0XGDykEGv7zR1n2ua.jpg",
+      "ratings": { "letterboxd": 4.2, "rottenTomatoes": 93, "imdb": 8.3 }
+    },
+    {
+      "title": "Eternal Sunshine of the Spotless Mind",
+      "year": 2004,
+      "primaryGenre": "Romance",
+      "genres": ["Romance", "Drama", "Sci-Fi"],
+      "description": "When a couple undergo a procedure to erase each other from their memories, they rediscover what they once had.",
+      "art": "https://image.tmdb.org/t/p/w342/5MwkWH9tYHv3mV9OdYTMR5qreIz.jpg",
+      "ratings": { "letterboxd": 4.3, "rottenTomatoes": 92, "imdb": 8.3 }
+    },
+    {
+      "title": "The Shining",
+      "year": 1980,
+      "primaryGenre": "Horror",
+      "genres": ["Horror", "Thriller"],
+      "description": "A family heads to an isolated hotel for the winter where a sinister presence influences the father into violence.",
+      "art": "https://image.tmdb.org/t/p/w342/b6ko0IKC8MdYBBPkkA1aBPLe2yz.jpg",
+      "ratings": { "letterboxd": 4.3, "rottenTomatoes": 83, "imdb": 8.4 }
+    },
+    {
+      "title": "Gladiator",
+      "year": 2000,
+      "primaryGenre": "Action",
+      "genres": ["Action", "Drama", "Adventure"],
+      "description": "A betrayed Roman general rises from slavery as a gladiator to seek vengeance against the corrupt emperor who murdered his family.",
+      "art": "https://image.tmdb.org/t/p/w342/ty8TGRuvJLPUmAR1H1nRIsgwvim.jpg",
+      "ratings": { "letterboxd": 4.0, "rottenTomatoes": 80, "imdb": 8.5 }
+    }
+  ]
+}
