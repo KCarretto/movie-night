@@ -936,6 +936,14 @@
     return closest.element;
   }
 
+  // True while any row is being dragged. On iOS Safari, preventDefault() on
+  // pointermove does NOT stop page scrolling — only a non-passive touchmove
+  // listener can. We register one globally and suppress scroll while dragging.
+  let ballotDragging = false;
+  document.addEventListener('touchmove', (e) => {
+    if (ballotDragging) e.preventDefault();
+  }, { passive: false });
+
   // Touch/mouse/pen reordering via Pointer Events (fixes mobile drag).
   function attachPointerDrag(li, handle) {
     if (!handle) return;
@@ -946,6 +954,7 @@
       if (hasVotedLocally) return;
       e.preventDefault();
       dragging = true;
+      ballotDragging = true;
       activePointer = e.pointerId;
       li.classList.add('dragging');
       try { handle.setPointerCapture(e.pointerId); } catch (_) {}
@@ -964,6 +973,7 @@
     const end = (e) => {
       if (!dragging || (activePointer !== null && e.pointerId !== activePointer)) return;
       dragging = false;
+      ballotDragging = false;
       activePointer = null;
       li.classList.remove('dragging');
       try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
