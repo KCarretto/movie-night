@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package movie_night;
+
+enum LanguageCode {
+  LANG_UNSPECIFIED = 0;
+  LANG_EN = 1;
+  LANG_FR = 2;
+  LANG_ES = 3;
+  LANG_DE = 4;
+  LANG_IT = 5;
+  LANG_PT = 6;
+  LANG_RU = 7;
+  LANG_JA = 8;
+  LANG_KO = 9;
+  LANG_ZH = 10;
+  LANG_HI = 11;
+  LANG_OTHER = 99; // Fallback to ensure forward compatibility
+}
+
+enum Genre {
+  GENRE_UNSPECIFIED = 0;
+  GENRE_ACTION = 1;
+  GENRE_ADVENTURE = 2;
+  GENRE_ANIMATION = 3;
+  GENRE_COMEDY = 4;
+  GENRE_CRIME = 5;
+  GENRE_DOCUMENTARY = 6;
+  GENRE_DRAMA = 7;
+  GENRE_FAMILY = 8;
+  GENRE_FANTASY = 9;
+  GENRE_HISTORY = 10;
+  GENRE_HORROR = 11;
+  GENRE_MUSIC = 12;
+  GENRE_MYSTERY = 13;
+  GENRE_ROMANCE = 14;
+  GENRE_SCIENCE_FICTION = 15;
+  GENRE_TV_MOVIE = 16;
+  GENRE_THRILLER = 17;
+  GENRE_WAR = 18;
+  GENRE_WESTERN = 19;
+  GENRE_UNKNOWN = 99; // Gracefully handles future TMDB additions
+}
+
+message Movie {
+  uint32 id = 1;                      // TMDB ID
+  uint32 year = 2;                    // Release Year
+  LanguageCode language = 3;          // High-efficiency enum varint field
+
+  // Ratings normalized to 0-100 integers to maximize Protobuf varint byte savings
+  uint32 letterboxd_rating = 4;
+  uint32 rotten_tomatoes_rating = 5;
+  uint32 imdb_rating = 6;
+
+  Genre primary_genre = 7;            // High-efficiency enum varint field
+  repeated Genre genres = 8;          // Compressed array of 1-byte enum varints
+
+  string title = 9;
+  string description = 10;
+  string art_path = 11;               // Relative image path only (e.g., "/lh4v5.jpg")
+  uint32 v_idx = 12;                  // Sequential byte offset pointer for embeddings.bin
+
+  repeated string director = 13;
+  repeated string cast = 14;
+}
+
+message MovieCatalog {
+  repeated Movie movies = 1;          // Core movie sequence array
+}
