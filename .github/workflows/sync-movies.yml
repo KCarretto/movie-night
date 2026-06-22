@@ -74,10 +74,12 @@ jobs:
             --ids-file "$IDS_FILE"
 
       - name: Install embedding dependencies
-        run: pip install --upgrade sentence-transformers
+        run: pip install --upgrade google-genai
 
       - name: Generate embeddings
-        run: python3 scripts/generate_embeddings.py --movies movies.pbf --embeddings embeddings.bin
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python3 scripts/generate_embeddings.py --movies movies.pbf --embeddings embeddings.bin --backend gemini --dim 3072
 
       - name: Commit changes
         run: |

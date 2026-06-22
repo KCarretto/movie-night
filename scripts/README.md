@@ -74,20 +74,22 @@ Recommendations are powered by static semantic vectors generated at build time b
 UI renders instantly; the browser lazy-loads the vectors in the background).
 
 ```bash
-pip install sentence-transformers protobuf   # local backend (default, offline, no key)
-python3 scripts/generate_embeddings.py --movies movies.pbf --embeddings embeddings.bin
+pip install google-genai protobuf            # gemini backend (default, requires GEMINI_API_KEY)
+GEMINI_API_KEY=... python3 scripts/generate_embeddings.py --movies movies.pbf --embeddings embeddings.bin
 ```
 
-- Uses `sentence-transformers/all-MiniLM-L6-v2` (384-dim vectors).
-- `embeddings.bin` is a **headerless** binary: each movie's vector is 384 IEEE-754
+- Default backend is Google's **Gemini** (`gemini-embedding-2`, 3072-dim vectors).
+- `embeddings.bin` is a **headerless** binary: each movie's vector is 3072 IEEE-754
   32-bit little-endian floats packed back to back with `struct` — exactly
-  `384 × 4 = 1,536` bytes per movie, no keys or delimiters. Each movie record in
+  `3072 × 4 = 12,288` bytes per movie, no keys or delimiters. Each movie record in
   `movies.pbf` carries a sequential `v_idx` pointer, so its vector lives at byte
-  offset `v_idx × 1536`. The browser slices it out zero-copy with a
+  offset `v_idx × 12288`. The browser slices it out zero-copy with a
   `Float32Array` view — no per-lookup parsing on the main thread.
 - Resumes by default: because the catalogue is append-only, vectors already in
   `embeddings.bin` are reused and only newly added titles are embedded. The script
   rewrites `movies.pbf` in place with the updated `v_idx` pointers.
+- Pass `--backend local` (with `sentence-transformers`) to embed offline with
+  `sentence-transformers/all-MiniLM-L6-v2` instead (no API key required).
 - Pass `--backend openai` (with `OPENAI_API_KEY`) to use OpenAI embeddings
   instead. The OpenAI backend requests the target dimensionality **natively**
   (the API `dimensions` parameter) rather than slicing the default 1536-dim
@@ -100,7 +102,7 @@ python3 scripts/generate_embeddings.py --movies movies.pbf --embeddings embeddin
   calls. It requests the target dimensionality natively (`output_dimensionality`)
   and shows a live progress indicator (job state + count) while the batch job runs.
 - The vector size is configurable via `--dim` (or the `EMBED_DIM` env var,
-  default `384`). The on-disk record size and the browser's `v_idx × dim × 4`
+  default `3072`). The on-disk record size and the browser's `v_idx × dim × 4`
   jump offset both derive from it, so they stay in lock-step — but the matching
   `EMBED_DIM` constant in `index.html` must be updated to the same value, since
   `embeddings.bin` is headerless.
