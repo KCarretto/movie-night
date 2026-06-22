@@ -75,16 +75,38 @@ import catalog_io
 LOCAL_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 OPENAI_MODEL = "text-embedding-3-small"
 
-# Fields combined (in order) into the text we embed for each movie.
-EMBED_FIELDS = ("title", "description", "primaryGenre", "genres", "director", "cast")
-
-# Vector dimensionality (all-MiniLM-L6-v2 emits 384 dims) and on-disk record
-# size: EMBED_DIM IEEE-754 32-bit floats => EMBED_DIM * 4 bytes per movie.
-EMBED_DIM = 384
+# Vector dimensionality and on-disk record size. ``all-MiniLM-L6-v2`` emits 384
+# dims; OpenAI's ``text-embedding-3-small`` is 1536 by default but can be asked
+# to natively emit a lower dimensionality. The value is configurable via the
+# ``EMBED_DIM`` environment variable or the ``--dim`` flag so a build can switch
+# backend/dimension profiles; the on-disk layout (``EMBED_DIM * 4`` bytes per
+# movie) and the browser's ``Float32Array`` jump index both derive from it, so
+# they stay in lock-step automatically.
+#
+# NOTE: the matching ``EMBED_DIM`` constant in ``index.html`` must equal whatever
+# dimensionality ``embeddings.bin`` is written with, since the file is headerless.
+DEFAULT_EMBED_DIM = 384
+EMBED_DIM = int(os.environ.get("EMBED_DIM", DEFAULT_EMBED_DIM))
 BYTES_PER_VECTOR = EMBED_DIM * 4
 
 # Little-endian 32-bit float layout, matching the browser's Float32Array view.
 _VECTOR_STRUCT = struct.Struct("<%df" % EMBED_DIM)
+
+
+def set_embed_dim(dim: int) -> None:
+    """Reconfigure the embedding dimensionality and derived storage layout.
+
+    Updating ``EMBED_DIM`` re-derives the per-record byte size and the ``struct``
+    packer so the on-disk ``embeddings.bin`` records (and therefore the browser's
+    ``v_idx * EMBED_DIM * 4`` jump offsets) automatically match the chosen
+    backend profile.
+    """
+    global EMBED_DIM, BYTES_PER_VECTOR, _VECTOR_STRUCT
+    if dim <= 0:
+        raise ValueError(f"EMBED_DIM must be a positive integer, got {dim!r}.")
+    EMBED_DIM = dim
+    BYTES_PER_VECTOR = dim * 4
+    _VECTOR_STRUCT = struct.Struct("<%df" % dim)
 
 
 def _as_text(value: Any) -> str:
@@ -97,9 +119,23 @@ def _as_text(value: Any) -> str:
 
 
 def movie_text(movie: Dict[str, Any]) -> str:
-    """Combine the relevant movie fields into a single text string."""
-    parts = [_as_text(movie.get(field)) for field in EMBED_FIELDS]
-    return " | ".join(part for part in parts if part)
+    """Render a movie's fields as a structured natural-language prompt.
+
+    A natural-language template (``Title: ... Director: ... Overview: ...``)
+    gives the embedding model far clearer semantic cues than raw pipe-joined
+    fields, which improves the quality of the similarity space the recommender
+    ranks against. Empty fields are dropped so the prompt never carries dangling
+    labels like ``Director: .``.
+    """
+    fields = (
+        ("Title", _as_text(movie.get("title"))),
+        ("Year", _as_text(movie.get("year"))),
+        ("Director", _as_text(movie.get("director"))),
+        ("Cast", _as_text(movie.get("cast"))),
+        ("Genres", _as_text(movie.get("genres")) or _as_text(movie.get("primaryGenre"))),
+        ("Overview", _as_text(movie.get("description"))),
+    )
+    return ". ".join(f"{label}: {value}" for label, value in fields if value)
 
 
 def pack_vector(vector: Sequence[float]) -> bytes:
@@ -142,7 +178,13 @@ class OpenAIBackend:
         self._model = model_name
 
     def embed(self, texts: Sequence[str]) -> List[List[float]]:
-        resp = self._client.embeddings.create(model=self._model, input=list(texts))
+        # Request the target dimensionality natively. ``text-embedding-3-*``
+        # models support Matryoshka truncation via the ``dimensions`` parameter,
+        # which re-projects the vector so it stays geometrically valid — unlike a
+        # naive ``vector[:EMBED_DIM]`` slice, which corrupts the latent space.
+        resp = self._client.embeddings.create(
+            model=self._model, input=list(texts), dimensions=EMBED_DIM
+        )
         # Preserve request order (the API echoes an index per item).
         ordered = sorted(resp.data, key=lambda d: d.index)
         return [list(d.embedding) for d in ordered]
@@ -184,6 +226,9 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--backend", choices=("local", "openai"),
                         default=os.environ.get("EMBED_BACKEND", "local"),
                         help="Embedding backend to use (default: local sentence-transformers).")
+    parser.add_argument("--dim", type=int, default=EMBED_DIM,
+                        help="Embedding dimensionality and on-disk record size "
+                             "(default: %(default)s; also settable via EMBED_DIM env).")
     parser.add_argument("--batch-size", type=int, default=256,
                         help="How many movie texts to embed per backend call (default: 256).")
     parser.add_argument("--limit", type=int, default=0,
@@ -193,6 +238,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
+    set_embed_dim(args.dim)
 
     catalog = catalog_io.load_catalog_proto(args.movies_path)
     movies = catalog.movies
