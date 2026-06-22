@@ -49,6 +49,8 @@ Backends
   on CPU, no API key required.
 * **OpenAI** — pass ``--backend openai`` (or set ``EMBED_BACKEND=openai``) to use
   OpenAI's ``text-embedding-3-small``. Requires ``OPENAI_API_KEY``.
+* **Gemini** — pass ``--backend gemini`` (or set ``EMBED_BACKEND=gemini``) to use
+  Google's ``gemini-embedding-2``. Requires ``GEMINI_API_KEY`` or ``GOOGLE_API_KEY``.
 
 Usage
 -----
@@ -59,6 +61,11 @@ Usage
     pip install openai protobuf
     export OPENAI_API_KEY=sk-...
     python3 scripts/generate_embeddings.py --backend openai
+
+    # or, using Gemini:
+    pip install google-genai protobuf
+    export GEMINI_API_KEY=AIza...
+    python3 scripts/generate_embeddings.py --backend gemini
 """
 
 from __future__ import annotations
@@ -204,46 +211,28 @@ class OpenAIBackend:
 
 
 class GeminiBackend:
-    """Google Gemini embedding backend. Requires GEMINI_API_KEY."""
+    """Google Gemini embedding backend. Requires GEMINI_API_KEY or GOOGLE_API_KEY."""
 
-    def __init__(self, model_name: str = "models/gemini-embedding-2") -> None:
-        if not os.environ.get("GEMINI_API_KEY"):
-            raise RuntimeError("GEMINI_API_KEY is not set but --backend gemini was requested.")
-        self._api_key = os.environ["GEMINI_API_KEY"].strip()
+    def __init__(self, model_name: str = "gemini-embedding-2") -> None:
+        from google import genai
+
+        api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
+        if not api_key:
+            raise RuntimeError(
+                "Neither GEMINI_API_KEY nor GOOGLE_API_KEY is set, but --backend gemini was requested."
+            )
+        self._client = genai.Client(api_key=api_key.strip())
         self._model = model_name
 
     def embed(self, texts: Sequence[str]) -> List[List[float]]:
-        import json
-        import urllib.request
-        import urllib.parse
-        import urllib.error
-
-        requests = []
-        for text in texts:
-            requests.append({
-                "model": self._model,
-                "content": {
-                    "parts": [{"text": text}]
-                },
-                "outputDimensionality": EMBED_DIM
-            })
-
-        payload = {"requests": requests}
-        url = f"https://generativelanguage.googleapis.com/v1beta/{self._model}:batchEmbedContents?key={urllib.parse.quote(self._api_key)}"
-        
-        headers = {"Content-Type": "application/json"}
-        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
-        
-        try:
-            with urllib.request.urlopen(req, timeout=60) as response:
-                resp_data = json.loads(response.read().decode("utf-8"))
-                embeddings = resp_data.get("embeddings", [])
-                return [emb.get("values", []) for emb in embeddings]
-        except urllib.error.HTTPError as err:
-            body = err.read().decode("utf-8") if err else ""
-            raise RuntimeError(f"Gemini API request failed: HTTP {err.code}: {err.reason}\nResponse: {body}")
-        except Exception as err:
-            raise RuntimeError(f"Gemini API request failed: {err}")
+        resp = self._client.models.embed_content(
+            model=self._model,
+            contents=list(texts),
+            config={"output_dimensionality": EMBED_DIM}
+        )
+        if not resp.embeddings:
+            return []
+        return [list(emb.values) for emb in resp.embeddings if emb.values is not None]
 
 
 def make_backend(name: str):
