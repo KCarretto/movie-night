@@ -147,7 +147,10 @@ export default function App() {
       winnerId: rt.state.results.winnerId,
       winnerTitle: rt.state.results.winnerTitle,
       rounds: rt.state.results.rounds,
+      totalBallots: rt.state.results.totalBallots,
       movies: rt.state.movies,
+      peers: (rt.state.peers || []).map((p) => ({ id: p.id, name: p.name })),
+      votes: rt.state.votes || {},
     });
     saveHistory(list.slice(-200));
     setSavedSig(sig);
@@ -374,7 +377,7 @@ export default function App() {
 
       <footer className="max-w-6xl mx-auto px-3 sm:px-4 pb-6 text-center text-xs text-slate-400">
         <div>Serverless P2P over WebRTC · No data leaves your devices except signaling.</div>
-        <div className="mt-1"><b>Version 33</b></div>
+        <div className="mt-1"><b>Version 34</b></div>
       </footer>
 
       <input
