@@ -1654,9 +1654,16 @@
         if (mine >= MAX_NOMINATIONS) return;          // enforce 2-per-person
         const title = String(action.title || '').trim().slice(0, 80);
         if (!title) return;
-        // Case-insensitive duplicate guard across the whole room.
-        if (state.movies.some((m) => m.title.toLowerCase() === title.toLowerCase())) return;
-        state.movies.push({ id: 'm_' + Math.random().toString(36).slice(2, 9), title, by: fromId });
+        // Duplicate guard (exact same movie or same freeform title) across the whole room.
+        const resolveId = (t, id) => id || (movieMeta(t) || {}).id;
+        const targetId = resolveId(title, action.tmdbId);
+        const isDup = state.movies.some((m) => {
+          const mId = resolveId(m.title, m.tmdbId);
+          if (targetId && mId) return targetId === mId;
+          return m.title.toLowerCase() === title.toLowerCase();
+        });
+        if (isDup) return;
+        state.movies.push({ id: 'm_' + Math.random().toString(36).slice(2, 9), title, tmdbId: action.tmdbId, by: fromId });
         break;
       }
 
