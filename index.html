@@ -553,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 15</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 16</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -941,6 +941,15 @@
         cast:                 { rule: 'repeated', type: 'string', id: 14 },
         voteCount:            { type: 'uint32', id: 15 },
         popularity:           { type: 'float',  id: 16 },
+        releaseDate:          { type: 'string', id: 17 },
+        runtime:              { type: 'uint32', id: 18 },
+        budget:               { type: 'uint32', id: 19 },
+        revenue:              { type: 'uint64', id: 20 },
+        originCountry:        { rule: 'repeated', type: 'string', id: 21 },
+        voteAverage:          { type: 'float',  id: 22 },
+        status:               { type: 'string', id: 23 },
+        imdbId:               { type: 'string', id: 24 },
+        keywords:             { rule: 'repeated', type: 'string', id: 25 },
       } },
       MovieCatalog: { fields: {
         movies: { rule: 'repeated', type: 'Movie', id: 1 },
@@ -977,6 +986,16 @@
       // Popularity footprint used to dampen/discard obscure recommendations.
       voteCount: m.voteCount || 0,
       popularity: m.popularity || 0,
+      // Additional metadata fields
+      release_date: m.releaseDate || '',
+      runtime: m.runtime || 0,
+      budget: m.budget || 0,
+      revenue: m.revenue ? (typeof m.revenue === 'object' && m.revenue.toNumber ? m.revenue.toNumber() : m.revenue) : 0,
+      origin_country: m.originCountry || [],
+      vote_average: m.voteAverage || 0,
+      status: m.status || '',
+      imdb_id: m.imdbId || '',
+      keywords: m.keywords || [],
     };
   }
 
@@ -1045,8 +1064,8 @@
     }
   }
 
-  // Fetch embeddings.bin after the catalogue is on screen and stash the raw bytes
-  // in a global ArrayBuffer. movieEmbedding() then slices zero-copy Float32Array
+  // Fetch embeddings.bin or its chunked parts (embeddings_part*.bin) after the catalogue is on screen
+  // and stash the raw bytes in a global ArrayBuffer. movieEmbedding() then slices zero-copy Float32Array
   // views out of it by v_idx. Failure is non-fatal: the engine simply falls back
   // to neutral similarity scores.
   async function loadEmbeddings() {
@@ -1054,9 +1073,34 @@
     embeddingsError = '';
     if (typeof renderAll === 'function') renderAll();
     try {
-      const res = await fetch('embeddings.bin', { cache: 'no-cache' });
-      if (!res.ok) throw new Error('HTTP ' + res.status);
-      const buf = await res.arrayBuffer();
+      let buf;
+      // 1. Try to load chunked embeddings starting from part 0
+      let partIdx = 0;
+      let chunks = [];
+      let res = await fetch(`embeddings_part${partIdx}.bin`, { cache: 'no-cache' });
+      if (res.ok) {
+        while (res.ok) {
+          const chunkBuf = await res.arrayBuffer();
+          chunks.push(new Uint8Array(chunkBuf));
+          partIdx++;
+          res = await fetch(`embeddings_part${partIdx}.bin`, { cache: 'no-cache' });
+        }
+        // Concatenate all parts
+        let totalLen = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
+        let combined = new Uint8Array(totalLen);
+        let offset = 0;
+        for (let chunk of chunks) {
+          combined.set(chunk, offset);
+          offset += chunk.length;
+        }
+        buf = combined.buffer;
+      } else {
+        // 2. Fall back to the single embeddings.bin file
+        const resSingle = await fetch('embeddings.bin', { cache: 'no-cache' });
+        if (!resSingle.ok) throw new Error('HTTP ' + resSingle.status);
+        buf = await resSingle.arrayBuffer();
+      }
+
       if (!buf.byteLength || (buf.byteLength % (EMBED_DIM * 4)) !== 0) {
         throw new Error('invalid embeddings size');
       }
@@ -1067,7 +1111,7 @@
       window.EMBEDDINGS_BUFFER = undefined;
       embeddingsStatus = 'error';
       embeddingsError = (e && e.message) ? e.message : 'unknown error';
-      console.warn('Could not load embeddings.bin:', e);
+      console.warn('Could not load embeddings:', e);
       if (typeof renderAll === 'function') renderAll();
       return;
     }

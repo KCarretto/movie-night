@@ -236,6 +236,15 @@ def build_movie(
         # out of recommendations so the feed surfaces films people have heard of.
         "vote_count": int(detail.get("vote_count", 0) or 0),
         "popularity": float(detail.get("popularity", 0.0) or 0.0),
+        "release_date": (detail.get("release_date") or "").strip() or None,
+        "runtime": int(detail.get("runtime", 0) or 0),
+        "budget": int(detail.get("budget", 0) or 0),
+        "revenue": int(detail.get("revenue", 0) or 0),
+        "origin_country": [str(c) for c in (detail.get("origin_country") or [])],
+        "vote_average": float(detail.get("vote_average", 0.0) or 0.0),
+        "status": (detail.get("status") or "").strip() or None,
+        "imdb_id": (detail.get("imdb_id") or "").strip() or None,
+        "keywords": [str(k["name"]) for k in (detail.get("keywords") or {}).get("keywords", []) if k.get("name")],
     }
     # Keep the TMDB id so future runs can skip movies already downloaded.
     tmdb_id = detail.get("id")
@@ -295,6 +304,7 @@ def movie_needs_enrichment(movie: Dict[str, Any]) -> bool:
         or not movie.get("director")
         or not movie.get("vote_count")
         or not movie.get("popularity")
+        or "release_date" not in movie
     )
 
 
@@ -325,7 +335,7 @@ def enrich_existing_movies(
         try:
             detail = client.get(
                 f"movie/{mid}",
-                {"language": "en-US", "append_to_response": "credits"},
+                {"language": "en-US", "append_to_response": "credits,keywords"},
             )
         except (RuntimeError, urllib.error.HTTPError) as err:
             print(f"\n  skip backfill {mid}: {err}", file=sys.stderr)
@@ -353,6 +363,35 @@ def enrich_existing_movies(
             if popularity:
                 movie["popularity"] = popularity
                 changed = True
+
+        # Backfill new fields if missing
+        if "release_date" not in movie:
+            movie["release_date"] = (detail.get("release_date") or "").strip() or None
+            changed = True
+        if "runtime" not in movie:
+            movie["runtime"] = int(detail.get("runtime", 0) or 0)
+            changed = True
+        if "budget" not in movie:
+            movie["budget"] = int(detail.get("budget", 0) or 0)
+            changed = True
+        if "revenue" not in movie:
+            movie["revenue"] = int(detail.get("revenue", 0) or 0)
+            changed = True
+        if "origin_country" not in movie:
+            movie["origin_country"] = [str(c) for c in (detail.get("origin_country") or [])]
+            changed = True
+        if "vote_average" not in movie:
+            movie["vote_average"] = float(detail.get("vote_average", 0.0) or 0.0)
+            changed = True
+        if "status" not in movie:
+            movie["status"] = (detail.get("status") or "").strip() or None
+            changed = True
+        if "imdb_id" not in movie:
+            movie["imdb_id"] = (detail.get("imdb_id") or "").strip() or None
+            changed = True
+        if "keywords" not in movie:
+            movie["keywords"] = [str(k["name"]) for k in (detail.get("keywords") or {}).get("keywords", []) if k.get("name")]
+            changed = True
         if changed:
             updated += 1
     progress.done(suffix=f"{updated} updated")
@@ -570,7 +609,7 @@ def iter_new_movies(
         try:
             detail = client.get(
                 f"movie/{movie_id}",
-                {"language": "en-US", "append_to_response": "credits"},
+                {"language": "en-US", "append_to_response": "credits,keywords"},
             )
         except (RuntimeError, urllib.error.HTTPError) as err:
             print(f"\n  skip {movie_id}: {err}", file=sys.stderr)

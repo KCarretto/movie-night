@@ -127,6 +127,11 @@ def movie_text(movie: Dict[str, Any]) -> str:
     ranks against. Empty fields are dropped so the prompt never carries dangling
     labels like ``Director: .``.
     """
+    budget_val = movie.get("budget", 0) or 0
+    revenue_val = movie.get("revenue", 0) or 0
+    runtime_val = movie.get("runtime", 0) or 0
+    vote_avg_val = movie.get("vote_average", 0.0) or 0.0
+
     fields = (
         ("Title", _as_text(movie.get("title"))),
         ("Year", _as_text(movie.get("year"))),
@@ -134,6 +139,14 @@ def movie_text(movie: Dict[str, Any]) -> str:
         ("Cast", _as_text(movie.get("cast"))),
         ("Genres", _as_text(movie.get("genres")) or _as_text(movie.get("primaryGenre"))),
         ("Overview", _as_text(movie.get("description"))),
+        ("Release Date", _as_text(movie.get("release_date"))),
+        ("Runtime", f"{runtime_val} minutes" if runtime_val > 0 else ""),
+        ("Budget", f"${budget_val:,}" if budget_val > 0 else ""),
+        ("Revenue", f"${revenue_val:,}" if revenue_val > 0 else ""),
+        ("Origin Country", _as_text(movie.get("origin_country"))),
+        ("Vote Average", str(vote_avg_val) if vote_avg_val > 0.0 else ""),
+        ("Status", _as_text(movie.get("status"))),
+        ("Keywords", _as_text(movie.get("keywords"))),
     )
     return ". ".join(f"{label}: {value}" for label, value in fields if value)
 
@@ -190,9 +203,54 @@ class OpenAIBackend:
         return [list(d.embedding) for d in ordered]
 
 
+class GeminiBackend:
+    """Google Gemini embedding backend. Requires GEMINI_API_KEY."""
+
+    def __init__(self, model_name: str = "models/gemini-embedding-2") -> None:
+        if not os.environ.get("GEMINI_API_KEY"):
+            raise RuntimeError("GEMINI_API_KEY is not set but --backend gemini was requested.")
+        self._api_key = os.environ["GEMINI_API_KEY"].strip()
+        self._model = model_name
+
+    def embed(self, texts: Sequence[str]) -> List[List[float]]:
+        import json
+        import urllib.request
+        import urllib.parse
+        import urllib.error
+
+        requests = []
+        for text in texts:
+            requests.append({
+                "model": self._model,
+                "content": {
+                    "parts": [{"text": text}]
+                },
+                "outputDimensionality": EMBED_DIM
+            })
+
+        payload = {"requests": requests}
+        url = f"https://generativelanguage.googleapis.com/v1beta/{self._model}:batchEmbedContents?key={urllib.parse.quote(self._api_key)}"
+        
+        headers = {"Content-Type": "application/json"}
+        req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers, method="POST")
+        
+        try:
+            with urllib.request.urlopen(req, timeout=60) as response:
+                resp_data = json.loads(response.read().decode("utf-8"))
+                embeddings = resp_data.get("embeddings", [])
+                return [emb.get("values", []) for emb in embeddings]
+        except urllib.error.HTTPError as err:
+            body = err.read().decode("utf-8") if err else ""
+            raise RuntimeError(f"Gemini API request failed: HTTP {err.code}: {err.reason}\nResponse: {body}")
+        except Exception as err:
+            raise RuntimeError(f"Gemini API request failed: {err}")
+
+
 def make_backend(name: str):
     if name == "openai":
         return OpenAIBackend()
+    if name == "gemini":
+        return GeminiBackend()
     if name == "local":
         return LocalBackend()
     raise ValueError(f"Unknown backend: {name!r}")
@@ -223,7 +281,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
                         help="Path to the movies catalogue to read and update (default: movies.pbf).")
     parser.add_argument("--embeddings", "--output", dest="embeddings_path", default="embeddings.bin",
                         help="Path to the packed embeddings binary to write (default: embeddings.bin).")
-    parser.add_argument("--backend", choices=("local", "openai"),
+    parser.add_argument("--backend", choices=("local", "openai", "gemini"),
                         default=os.environ.get("EMBED_BACKEND", "local"),
                         help="Embedding backend to use (default: local sentence-transformers).")
     parser.add_argument("--dim", type=int, default=EMBED_DIM,
@@ -291,16 +349,58 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         blob.extend(record)
         written += 1
 
-    tmp_path = args.embeddings_path + ".tmp"
-    with open(tmp_path, "wb") as handle:
-        handle.write(bytes(blob))
-    os.replace(tmp_path, args.embeddings_path)
+    # Check if the total size exceeds 100MB (100 * 1024 * 1024 bytes)
+    max_size = 100 * 1024 * 1024
+    total_size = len(blob)
+    embeddings_dir = os.path.dirname(args.embeddings_path) or "."
+
+    # Always clean up any existing part files to avoid leftovers
+    if os.path.exists(embeddings_dir):
+        for f in os.listdir(embeddings_dir):
+            if f.startswith("embeddings_part") and f.endswith(".bin"):
+                try:
+                    os.remove(os.path.join(embeddings_dir, f))
+                except OSError:
+                    pass
+
+    if total_size > max_size:
+        # Split into chunks of 50MB (50 * 1024 * 1024 bytes)
+        chunk_size_bytes = 50 * 1024 * 1024
+        # Align to BYTES_PER_VECTOR to avoid split vectors
+        chunk_size = (chunk_size_bytes // BYTES_PER_VECTOR) * BYTES_PER_VECTOR
+        if chunk_size == 0:
+            chunk_size = BYTES_PER_VECTOR
+
+        part_idx = 0
+        offset = 0
+        while offset < total_size:
+            chunk_data = blob[offset : offset + chunk_size]
+            part_path = os.path.join(embeddings_dir, f"embeddings_part{part_idx}.bin")
+            tmp_part_path = part_path + ".tmp"
+            with open(tmp_part_path, "wb") as handle:
+                handle.write(chunk_data)
+            os.replace(tmp_part_path, part_path)
+            part_idx += 1
+            offset += chunk_size
+
+        # Remove the master file to prevent loading outdated single file
+        if os.path.exists(args.embeddings_path):
+            try:
+                os.remove(args.embeddings_path)
+            except OSError:
+                pass
+        print(f"Split {total_size} bytes into {part_idx} chunk files because total size exceeded 100MB.")
+    else:
+        tmp_path = args.embeddings_path + ".tmp"
+        with open(tmp_path, "wb") as handle:
+            handle.write(bytes(blob))
+        os.replace(tmp_path, args.embeddings_path)
+        print(f"Wrote {args.embeddings_path} with {written} vectors.")
 
     catalog_io.save_catalog_proto(args.movies_path, catalog)
 
     print(
-        f"Wrote {args.embeddings_path} with {written} vectors "
-        f"({len(new_vectors)} new) and updated {args.movies_path}."
+        f"Updated {args.movies_path} and completed writing embeddings."
     )
     return 0
 
