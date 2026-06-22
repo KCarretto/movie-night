@@ -2038,7 +2038,8 @@
 
     // ---- Results: the winner's art becomes the full-page backdrop. ----
     if (state.phase === 'results' && state.results && state.results.winnerTitle) {
-      const meta = movieMeta(state.results.winnerTitle);
+      const winMovie = state.movies.find((m) => m.id === state.results.winnerId);
+      const meta = winMovie ? movieMeta(winMovie.title, winMovie.tmdbId) : movieMeta(state.results.winnerTitle);
       const art = meta && meta.art;
       const sig = 'winner|' + (art || '');
       if (sig === bgArtSig) return;
@@ -2054,7 +2055,7 @@
     const arts = [];
     const seen = new Set();
     state.movies.forEach((m) => {
-      const meta = movieMeta(m.title);
+      const meta = movieMeta(m.title, m.tmdbId);
       if (meta && meta.art && !seen.has(meta.art)) { seen.add(meta.art); arts.push(meta.art); }
     });
     const sig = 'tile|' + arts.join('|');
@@ -2095,7 +2096,7 @@
 
     const canEdit = state.phase === 'lobby';
     state.movies.forEach((m, i) => {
-      const meta = movieMeta(m.title);
+      const meta = movieMeta(m.title, m.tmdbId);
       const li = el('li', 'flex items-center gap-3 bg-panel2 border border-line rounded-lg px-3 py-2');
       const who = (state.peers.find((p) => p.id === m.by) || {}).name || 'Someone';
       const mineMovie = m.by === myId;
@@ -3873,7 +3874,7 @@
     ballotOrder.forEach((id, idx) => {
       const movie = state.movies.find((m) => m.id === id);
       if (!movie) return;
-      const meta = movieMeta(movie.title);
+      const meta = movieMeta(movie.title, movie.tmdbId);
       const tags = meta ? genreTagsHtml(meta) : '';
       const desc = meta && meta.description ? meta.description : '';
       const li = el('li', 'rank-row flex items-center gap-2 bg-panel2 border border-line rounded-lg px-3 py-2.5');
@@ -4073,7 +4074,8 @@
       : 'Nobody submitted a ranking.';
 
     // Show the winner's poster art and ratings (mirrors the typeahead card).
-    const winMeta = r.winnerTitle ? movieMeta(r.winnerTitle) : null;
+    const winMovie = state.movies.find((m) => m.id === r.winnerId);
+    const winMeta = winMovie ? movieMeta(winMovie.title, winMovie.tmdbId) : (r.winnerTitle ? movieMeta(r.winnerTitle) : null);
     const winArt = $('#winnerArt');
     const winRatings = $('#winnerRatings');
     if (winArt) {
@@ -4104,7 +4106,7 @@
     const nonVoters = state.peers.filter((p) => !(Array.isArray(state.votes[p.id]) && state.votes[p.id].length));
 
     state.movies.forEach((m) => {
-      const meta = movieMeta(m.title);
+      const meta = movieMeta(m.title, m.tmdbId);
       const langBadge = meta ? languageBadgeHtml(meta) : '';
       const box = el('div', 'bg-panel2 border border-line rounded-lg p-3');
       const chips = voters.map((p) => {
