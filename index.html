@@ -553,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 27</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 28</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -2971,10 +2971,16 @@
                     data-title="${safeTitle}" aria-pressed="${onList ? 'true' : 'false'}">
               <i class="fa-${onList ? 'solid' : 'regular'} fa-bookmark mr-1"></i>${onList ? 'Added to Watchlist' : 'Add to Watchlist'}
             </button>
-            <button class="rec-watched btn w-full text-xs font-semibold py-1.5 rounded-lg bg-panel2 border border-line text-slate-300"
-                    data-title="${safeTitle}">
-              <i class="fa-regular fa-circle-check mr-1"></i>Watched
-            </button>
+            <div class="flex gap-1">
+              <button class="rec-watched btn flex-1 text-[10px] leading-tight font-semibold py-1.5 px-1 rounded-lg bg-panel2 border border-line text-slate-300"
+                      data-title="${safeTitle}">
+                <i class="fa-regular fa-circle-check mr-0.5"></i>Watched
+              </button>
+              <button class="rec-not-interested btn flex-1 text-[10px] leading-tight font-semibold py-1.5 px-1 rounded-lg bg-panel2 border border-line text-slate-300"
+                      data-title="${safeTitle}">
+                <i class="fa-solid fa-thumbs-down mr-0.5"></i>Not Interested
+              </button>
+            </div>
           </div>
         </div>
       </div>`;
@@ -3396,6 +3402,12 @@
         }
       });
     });
+    track.querySelectorAll('.rec-not-interested').forEach((btn) => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        markNotInterested(btn.dataset.title || '');
+      });
+    });
     track.querySelectorAll('.rec-watched').forEach((btn) => {
       btn.addEventListener('click', (e) => {
         e.stopPropagation();
@@ -3404,11 +3416,11 @@
     });
     track.querySelectorAll('.rec-card').forEach((card) => {
       card.addEventListener('click', (e) => {
-        if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched')) return;
+        if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-not-interested')) return;
         openRecommendationDetail(card.dataset.title || '');
       });
       card.addEventListener('keydown', (e) => {
-        if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched')) return;
+        if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-not-interested')) return;
         e.preventDefault();
         openRecommendationDetail(card.dataset.title || '');
       });
@@ -3797,6 +3809,12 @@
             }
           });
         });
+        tempDiv.querySelectorAll('.rec-not-interested').forEach((btn) => {
+          btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            markNotInterested(btn.dataset.title || '');
+          });
+        });
         tempDiv.querySelectorAll('.rec-watched').forEach((btn) => {
           btn.addEventListener('click', (e) => {
             e.stopPropagation();
@@ -3805,11 +3823,11 @@
         });
         tempDiv.querySelectorAll('.rec-card').forEach((card) => {
           card.addEventListener('click', (e) => {
-            if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched')) return;
+            if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-not-interested')) return;
             openRecommendationDetail(card.dataset.title || '');
           });
           card.addEventListener('keydown', (e) => {
-            if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched')) return;
+            if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-not-interested')) return;
             e.preventDefault();
             openRecommendationDetail(card.dataset.title || '');
           });
