@@ -10,19 +10,34 @@ export default function RoomBar() {
   const [name, setName] = useState(rt.myName || '');
   const [copied, setCopied] = useState(false);
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [qrZoom, setQrZoom] = useState(false);
   const qrRef = useRef(null);
+  const qrZoomRef = useRef(null);
   const scannerRef = useRef(null);
   const scannerId = 'qr-reader';
   const url = useMemo(() => shareUrl(), [rt.roomId]);
 
   useEffect(() => { setName(rt.myName || ''); }, [rt.myName]);
 
-  useEffect(() => {
-    if (!rt.isHost || !qrRef.current || !window.QRCode) return;
-    qrRef.current.innerHTML = '';
+  // Render a QR code for the share URL into `el` at the given native pixel size.
+  // qrcode.js paints a fixed-size canvas/img; CSS (.qr-box / .qr-box-zoom) then
+  // scales it responsively — larger on mobile, enlarged in the zoom overlay.
+  const renderQr = (el, size) => {
+    if (!el || !window.QRCode) return;
+    el.innerHTML = '';
     // eslint-disable-next-line no-new
-    new window.QRCode(qrRef.current, { text: url, width: 108, height: 108, correctLevel: window.QRCode.CorrectLevel.M });
+    new window.QRCode(el, { text: url, width: size, height: size, correctLevel: window.QRCode.CorrectLevel.M });
+  };
+
+  useEffect(() => {
+    if (!rt.isHost) return;
+    renderQr(qrRef.current, 360);
   }, [rt.isHost, url]);
+
+  useEffect(() => {
+    if (!qrZoom) return;
+    renderQr(qrZoomRef.current, 640);
+  }, [qrZoom, url]);
 
   useEffect(() => {
     if (!scannerOpen || !window.Html5Qrcode) return undefined;
@@ -90,7 +105,15 @@ export default function RoomBar() {
                 </button>
               </div>
             </div>
-            <div className="rounded-lg bg-white p-2 text-black" ref={qrRef} aria-label="Join QR" />
+            <button
+              type="button"
+              className="bg-white p-2 rounded-lg text-black qr-box self-center sm:self-start"
+              onClick={() => setQrZoom(true)}
+              aria-label="Enlarge join QR code"
+              title="Tap to enlarge"
+            >
+              <div ref={qrRef} />
+            </button>
           </div>
         ) : (
           <div className="space-y-2">
@@ -103,6 +126,29 @@ export default function RoomBar() {
           </div>
         )}
       </div>
+
+      {qrZoom && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setQrZoom(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Enlarged join QR code"
+        >
+          <div className="flex flex-col items-center gap-4" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-white p-4 rounded-2xl qr-box-zoom">
+              <div ref={qrZoomRef} />
+            </div>
+            <button
+              type="button"
+              className="btn bg-panel2 border border-line text-sm px-5 py-2 rounded-lg text-slate-200"
+              onClick={() => setQrZoom(false)}
+            >
+              Close
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }

@@ -4,6 +4,7 @@ import { emit } from '../lib/runtime.js';
 import { LANGUAGE_INFO } from '../lib/format.js';
 import {
   getRecommendations, recommendationDataStatus, markRankingStale, replaceRecommendation,
+  appendRecommendations,
 } from '../lib/recengine.js';
 import {
   inWatchlist, addToWatchlist, removeFromWatchlist, markNotInterested,
@@ -20,6 +21,7 @@ const REC_EMBEDDINGS_TIMEOUT_MS = 30000;
 export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain, onOpenRate }) {
   const rt = useStore();
   const trackRef = useRef(null);
+  const appendRaf = useRef(0);
   const [embeddingsTimedOut, setEmbeddingsTimedOut] = useState(false);
 
   // Hold on the skeleton shimmer until embeddings land (or we give up waiting)
@@ -35,6 +37,8 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
     const t = setTimeout(() => setEmbeddingsTimedOut(true), REC_EMBEDDINGS_TIMEOUT_MS);
     return () => clearTimeout(t);
   }, [embeddingsPending]);
+
+  useEffect(() => () => { if (appendRaf.current) cancelAnimationFrame(appendRaf.current); }, []);
 
   const dataStatus = recommendationDataStatus();
   const recs = embeddingsPending ? { list: [], personalised: false, totalAvailable: 0 } : getRecommendations();
@@ -66,6 +70,31 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
   const setLanguages = (next) => { rt.activeSelectedLanguages = next; applyFilterChange(); };
 
   const forceRefresh = () => { getRecommendations({ forceRefresh: true }); emit(); };
+
+  // Infinite scroll: when the carousel nears its right edge, append the next
+  // batch of recommendations so it keeps loading more as the user scrolls.
+  const maybeAppend = () => {
+    const el = trackRef.current;
+    if (!el || shimmer) return;
+    const remaining = el.scrollWidth - el.scrollLeft - el.clientWidth;
+    if (remaining > 320) return;
+    const before = getRecommendations().list.length;
+    const after = appendRecommendations();
+    if (after.list.length !== before) emit();
+  };
+
+  const onTrackScroll = () => {
+    if (appendRaf.current) return;
+    appendRaf.current = requestAnimationFrame(() => {
+      appendRaf.current = 0;
+      maybeAppend();
+    });
+  };
+
+  const scrollNext = () => {
+    trackRef.current?.scrollBy({ left: 280, behavior: 'smooth' });
+    maybeAppend();
+  };
 
   // ---- rec-card actions ----
   const movies = rt.state?.movies || [];
@@ -127,11 +156,11 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
         <button type="button" className="rec-nav rec-prev" onClick={() => trackRef.current?.scrollBy({ left: -280, behavior: 'smooth' })} aria-label="Previous recommendations">
           <i className="fa-solid fa-chevron-left" />
         </button>
-        <button type="button" className="rec-nav rec-next" onClick={() => trackRef.current?.scrollBy({ left: 280, behavior: 'smooth' })} aria-label="Next recommendations">
+        <button type="button" className="rec-nav rec-next" onClick={scrollNext} aria-label="Next recommendations">
           <i className="fa-solid fa-chevron-right" />
         </button>
 
-        <div className="rec-track" ref={trackRef} role="list" aria-label="Recommended movies">
+        <div className="rec-track" ref={trackRef} role="list" aria-label="Recommended movies" onScroll={onTrackScroll}>
           {shimmer && Array.from({ length: 8 }).map((_, i) => (
             <div key={i} className="rec-card rec-shimmer" aria-hidden="true">
               <div className="relative overflow-hidden rounded-t-xl">

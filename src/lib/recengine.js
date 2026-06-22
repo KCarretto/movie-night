@@ -415,6 +415,29 @@ export function getRecommendations(options = {}) {
   return recCache;
 }
 
+// Append the next batch of recommendations onto the current visible list so the
+// carousel scrolls "infinitely". Returns the updated cache; the list reference
+// only changes when there are genuinely more picks to show, so callers can
+// detect exhaustion by comparing list lengths.
+export function appendRecommendations() {
+  const sig = recSignature();
+  if (recCache.sig !== sig || !Array.isArray(recCache.list)) {
+    return getRecommendations();
+  }
+  const profile = buildTasteProfile();
+  const pc = ensurePrecompute(sig, profile);
+  refreshStaleRanking();
+  const batch = pc.batches.length ? pc.batches.shift() : nextRecBatch(pc.ranked, profile);
+  if (!batch.length) return recCache;
+  recCache = {
+    ...recCache,
+    list: recCache.list.concat(batch),
+    totalAvailable: pc.ranked.length,
+  };
+  schedulePrecompute();
+  return recCache;
+}
+
 // Surgically swap a single actioned card (e.g. "Not Interested") out of the
 // current visible batch for the next-best recommendation, leaving every other
 // card untouched. Without this, the changed taste signal (which feeds
