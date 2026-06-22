@@ -553,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 14</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 15</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -2293,7 +2293,19 @@
       keyword:  0.25,
       quality:  1.0,
       groupEmbedding: 2.0,
+      // Hybrid-scoring weights (Part 3): an explicit per-user semantic match
+      // against the viewer's own taste clusters, plus a log-scaled audience
+      // trust factor so well-loved films outrank obscure look-alikes.
+      tasteCentroid:  1.5,
+      popularity:     0.6,
     },
+    // Multi-centroid taste modelling: cluster a user's liked movies into up to
+    // this many preference centroids so multi-modal tastes (e.g. horror AND
+    // romcom) each surface their own matches instead of averaging to mush. The
+    // dislike centroid's cosine alignment is subtracted at the given strength.
+    maxCentroids: 3,
+    centroidIters: 6,
+    dislikeAlpha: 0.5,
     // Popularity floor: candidates below these TMDB footprints are treated as
     // too obscure to recommend. Legacy catalogue entries that predate the
     // popularity fields (voteCount === 0) are exempt until backfilled.
@@ -2368,6 +2380,35 @@
     return n ? sum / n : 0.5;
   }
 
+  // ---------- audience-trust (log-scaled popularity) ----------
+  // Cached maximum vote count across the catalogue, used to normalise the
+  // log-popularity trust factor into [0, 1]. Recomputed if the catalogue size
+  // changes (it loads once at startup, so this is effectively a one-off scan).
+  let _maxVoteLog = 0, _maxVoteLogFor = -1;
+  function maxVoteLog() {
+    if (_maxVoteLogFor !== MOVIE_DB.length) {
+      let maxVotes = 0;
+      for (const m of MOVIE_DB) {
+        const v = m && m.voteCount ? m.voteCount : 0;
+        if (v > maxVotes) maxVotes = v;
+      }
+      _maxVoteLog = Math.log(maxVotes + 1) || 1;   // guard against log(1)=0
+      _maxVoteLogFor = MOVIE_DB.length;
+    }
+    return _maxVoteLog;
+  }
+
+  // Audience trust factor P_trust = ln(votes + 1) / ln(maxVotes + 1), in [0, 1].
+  // Films with no recorded footprint (legacy entries) get a neutral 0.5 so they
+  // are neither boosted nor buried before the sync backfill populates votes.
+  function popularityTrust(m) {
+    const votes = m && m.voteCount ? m.voteCount : 0;
+    if (votes <= 0) return 0.5;
+    const denom = maxVoteLog();
+    if (denom <= 0) return 0.5;
+    return Math.max(0, Math.min(1, Math.log(votes + 1) / denom));
+  }
+
   // ---------- cosine similarity ----------
   // Cosine similarity between two equal-length numeric vectors, in [-1, 1].
   // Accepts plain Arrays (peer vectors over WebRTC, taste vectors) or typed
@@ -2386,6 +2427,67 @@
     }
     if (magA === 0 || magB === 0) return 0;
     return dot / (Math.sqrt(magA) * Math.sqrt(magB));
+  }
+
+  // ---------- multi-centroid taste clustering ----------
+  // Group a user's liked-movie embeddings into up to `k` preference centroids
+  // with a light cosine-distance k-means (Lloyd's algorithm, few iterations).
+  // A single averaged taste vector collapses multi-modal tastes (e.g. horror +
+  // romcom) into a mid-point that matches neither; separate centroids let each
+  // cluster surface its own matches. Returns an array of normalised centroid
+  // vectors (plain Arrays). Cheap: |samples| is the user's liked history.
+  function clusterCentroids(samples, k, iters) {
+    const pts = samples.filter((s) => isVector(s.emb) && s.emb.length > 0);
+    if (!pts.length) return [];
+    const dim = pts[0].emb.length;
+    const norm = (v) => {
+      let mag = 0;
+      for (let i = 0; i < v.length; i++) mag += v[i] * v[i];
+      mag = Math.sqrt(mag);
+      if (!mag) return v.slice();
+      const out = new Array(v.length);
+      for (let i = 0; i < v.length; i++) out[i] = v[i] / mag;
+      return out;
+    };
+    // Few samples → each one is its own centroid (nothing to cluster).
+    if (pts.length <= k) return pts.map((p) => norm(Array.from(p.emb)));
+    // Seed centroids by spreading picks evenly across the sample list so the
+    // initial clusters aren't all bunched at the start of the history.
+    const centroids = [];
+    for (let c = 0; c < k; c++) {
+      const idx = Math.floor((c * pts.length) / k);
+      centroids.push(norm(Array.from(pts[idx].emb)));
+    }
+    const assign = new Array(pts.length).fill(0);
+    for (let it = 0; it < iters; it++) {
+      let moved = false;
+      // Assignment step: nearest centroid by cosine similarity.
+      for (let p = 0; p < pts.length; p++) {
+        let best = 0, bestSim = -Infinity;
+        for (let c = 0; c < centroids.length; c++) {
+          const sim = cosineSimilarity(pts[p].emb, centroids[c]);
+          if (sim > bestSim) { bestSim = sim; best = c; }
+        }
+        if (assign[p] !== best) { assign[p] = best; moved = true; }
+      }
+      // Update step: mean of each cluster's members, re-normalised.
+      const sums = Array.from({ length: k }, () => new Array(dim).fill(0));
+      const counts = new Array(k).fill(0);
+      for (let p = 0; p < pts.length; p++) {
+        const c = assign[p], emb = pts[p].emb;
+        counts[c] += 1;
+        for (let i = 0; i < dim; i++) sums[c][i] += emb[i];
+      }
+      for (let c = 0; c < k; c++) {
+        if (!counts[c]) continue;          // keep the old centroid if empty
+        for (let i = 0; i < dim; i++) sums[c][i] /= counts[c];
+        centroids[c] = norm(sums[c]);
+      }
+      if (!moved && it > 0) break;          // converged
+    }
+    // Drop centroids that ended up with no members.
+    const live = new Set(assign);
+    return centroids.filter((_, c) => live.has(c));
   }
 
   // ---------- group-taste vibe ----------
@@ -2585,8 +2687,14 @@
       for (let i = 0; i < dislikeVector.length; i++) dislikeVector[i] /= dislikeWeight;
     }
 
+    // Cluster the liked-movie embeddings into up to maxCentroids preference
+    // centroids so multi-modal tastes are modelled separately (Part 2). The
+    // dislikeVector doubles as the single negative centroid.
+    const positiveCentroids = clusterCentroids(
+      positiveSamples, REC_CONFIG.maxCentroids, REC_CONFIG.centroidIters);
+
     return { genreWeights, actorWeights, directorWeights, keywordWeights,
-             userVector, dislikeVector, positiveSamples,
+             userVector, dislikeVector, positiveSamples, positiveCentroids,
              watchedCount: watched.length, ratedCount: rated, hasSignal,
              likedDirectors };
   }
@@ -2615,13 +2723,17 @@
     const kws  = m.keywords || [];
     const kw   = kws.reduce((s, k) => s + (profile.keywordWeights.get(k) || 0), 0) / (kws.length || 1);
     const qual = qualityScore(m);
+    // Audience-trust factor: log-scaled vote count normalised to [0, 1] so
+    // well-loved films outrank obscure titles that merely match the text.
+    const pTrust = popularityTrust(m);
 
     // Group-taste collaborative filter: how well this candidate fits the whole
     // room's combined vibe (local user + every peer taste vector), in [0, 1].
     const groupCosineScore = groupVibeScore(m, profile);
 
     let score = w.genre * gen + w.actor * act + w.director * dir + w.keyword * kw
-              + w.quality * qual + w.groupEmbedding * groupCosineScore;
+              + w.quality * qual + w.groupEmbedding * groupCosineScore
+              + w.popularity * pTrust;
 
     if (profile.likedDirectors && profile.likedDirectors.size > 0) {
       const hasLikedDir = dirs.some((d) => profile.likedDirectors.has(d));
@@ -2630,13 +2742,25 @@
       }
     }
 
-    // Negative-context alignment: penalise candidates that look like films the
-    // user actively disliked. Subtract half of the (positive) cosine alignment
-    // to the aggregated dislike vector.
+    // Multi-centroid semantic match + negative feedback (Part 2):
+    //   Score_base = max_k cos(emb, C_pos_k) - alpha * cos(emb, C_neg)
+    // Take the single best-matching positive cluster so a film only needs to fit
+    // ONE facet of the viewer's taste, then subtract a fraction of the dislike
+    // alignment so look-alikes of disliked films are pushed down.
     const emb = movieEmbedding(m);
-    if (emb && isVector(profile.dislikeVector)) {
-      const dislikeAlign = Math.max(0, cosineSimilarity(emb, profile.dislikeVector));
-      score -= 0.5 * dislikeAlign;
+    if (emb) {
+      if (profile.positiveCentroids && profile.positiveCentroids.length) {
+        let best = -Infinity;
+        for (const c of profile.positiveCentroids) {
+          const sim = cosineSimilarity(emb, c);
+          if (sim > best) best = sim;
+        }
+        if (best > -Infinity) score += w.tasteCentroid * Math.max(0, best);
+      }
+      if (isVector(profile.dislikeVector)) {
+        const dislikeAlign = Math.max(0, cosineSimilarity(emb, profile.dislikeVector));
+        score -= REC_CONFIG.dislikeAlpha * w.tasteCentroid * dislikeAlign;
+      }
     }
 
     return score;
