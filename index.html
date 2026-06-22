@@ -897,6 +897,7 @@
   let MOVIE_DB = [];
   const movieByTitle = new Map();   // normalized title -> db entry
   const movieByKey = new Map();     // looser dbKey -> db entry (punctuation-insensitive)
+  const movieById = new Map();      // tmdb_id -> db entry
   let movieDbStatus = 'idle';       // idle | loading | ready | error
   let movieDbError = '';
   let embeddingsStatus = 'idle';    // idle | loading | ready | error
@@ -1012,6 +1013,7 @@
   function indexMovieDb() {
     movieByTitle.clear();
     movieByKey.clear();
+    movieById.clear();
     MOVIE_DB.forEach((m) => {
       if (m && m.title) {
         // Pre-compute the description keyword list once at startup so the hot
@@ -1020,6 +1022,7 @@
         movieByTitle.set(normTitle(m.title), m);
         const k = dbKey(m.title);
         if (k && !movieByKey.has(k)) movieByKey.set(k, m);
+        if (m.id) movieById.set(m.id, m);
       }
     });
   }
@@ -1027,7 +1030,8 @@
   // Look up a catalogue entry for a nominated title. Falls back to the looser
   // punctuation-insensitive key so freeform titles still match when they line
   // up with a known movie (case/space/special-character differences aside).
-  function movieMeta(title) {
+  function movieMeta(title, id) {
+    if (id && movieById.has(id)) return movieById.get(id);
     if (!title) return null;
     return movieByTitle.get(normTitle(title)) || movieByKey.get(dbKey(title)) || null;
   }
