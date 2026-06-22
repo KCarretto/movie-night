@@ -185,9 +185,9 @@ export default function History() {
 
       <section className="card p-4 sm:p-5">
         <div className="flex flex-wrap items-center gap-2 mb-2">
-          <h2 className="text-lg font-semibold text-white mr-auto">Watched</h2>
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search watched…" className="bg-panel2 border border-line rounded-lg px-3 py-2 text-sm" />
-          <select value={sort} onChange={(e) => setSort(e.target.value)} className="bg-panel2 border border-line rounded-lg px-3 py-2 text-sm">
+          <h2 className="text-lg font-semibold text-white w-full sm:w-auto sm:mr-auto">Watched</h2>
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search watched…" className="flex-1 min-w-0 sm:flex-none bg-panel2 border border-line rounded-lg px-3 py-2 text-sm" />
+          <select value={sort} onChange={(e) => setSort(e.target.value)} className="flex-none bg-panel2 border border-line rounded-lg px-3 py-2 text-sm">
             <option value="recent">Most recent</option>
             <option value="rating">Highest rated</option>
             <option value="title">Title</option>

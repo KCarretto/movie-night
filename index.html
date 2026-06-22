@@ -118,6 +118,12 @@
     /* Settings cog dropdown menu */
     .menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 160px; z-index: 40; }
 
+    /* Native <select> dropdowns (e.g. the watched-history sort control). Force
+       the option popup onto the dark theme so the list renders legibly on every
+       browser instead of falling back to a light/system-coloured menu. */
+    select { color-scheme: dark; }
+    select option { background-color: #1c212d; color: #e2e8f0; }
+
     /* Typeahead suggestion dropdown for the movie nomination input. */
     .typeahead { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 45;
       max-height: 320px; overflow-y: auto; }
@@ -212,8 +218,8 @@
        scale those children responsively so the code is large and crisp on
        phones (where this flow is most used) while staying tidy on desktop. */
     .qr-box :where(canvas, img) { width: 100%; height: auto; display: block; image-rendering: pixelated; }
-    .qr-box { width: 260px; max-width: 78vw; cursor: zoom-in; }
-    @media (min-width: 640px) { .qr-box { width: 200px; cursor: zoom-in; } }
+    .qr-box { width: 300px; max-width: 86vw; cursor: zoom-in; }
+    @media (min-width: 640px) { .qr-box { width: 200px; max-width: none; cursor: zoom-in; } }
     /* Enlarged QR shown in the zoom dialog. */
     .qr-box-zoom :where(canvas, img) { width: 100%; height: auto; display: block; image-rendering: pixelated; }
     .qr-box-zoom { width: min(86vw, 86vh, 520px); }

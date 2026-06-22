@@ -88,11 +88,11 @@ export default function RoomBar() {
         </div>
 
         {rt.isHost ? (
-          <div className="flex gap-4 items-start">
+          <div className="flex flex-col sm:flex-row gap-4 sm:items-start">
             <div className="space-y-2">
               <div className="text-xs text-slate-400">Share link</div>
               <div className="flex items-center gap-2">
-                <input value={url} readOnly className="bg-panel2 border border-line rounded-lg px-3 py-2 text-xs w-64 max-w-[62vw]" />
+                <input value={url} readOnly className="bg-panel2 border border-line rounded-lg px-3 py-2 text-xs w-64 max-w-full sm:max-w-[62vw]" />
                 <button
                   type="button"
                   className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm"
