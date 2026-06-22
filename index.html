@@ -171,15 +171,11 @@
     @keyframes spin { to { transform: rotate(360deg); } }
     .rec-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
       overflow: hidden; }
-    .rec-why-wrap { position: relative; display: inline-flex; max-width: 100%; }
-    .rec-why { display: inline-flex; align-items: center; gap: 3px; max-width: 100%;
-      font-size: 10px; line-height: 1.2; padding: 2px 6px; border-radius: 9999px;
-      background: rgba(124,92,255,.14); color: #b9a7ff; border: 1px solid rgba(124,92,255,.28);
-      white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .rec-why-pop { position: absolute; left: 0; bottom: calc(100% + 6px); min-width: 180px;
-      max-width: 260px; z-index: 20; display: none; font-size: 11px; line-height: 1.35;
-      color: #cbd5e1; padding: 8px 10px; white-space: normal; }
-    .rec-why-wrap:hover .rec-why-pop, .rec-why-wrap:focus-within .rec-why-pop, .rec-why-wrap.open .rec-why-pop { display: block; }
+    /* Insights cluster map */
+    .insights-svg { width: 100%; height: auto; display: block; background:
+      radial-gradient(circle at 50% 40%, rgba(124,92,255,.06), transparent 70%); border-radius: 12px; }
+    .insights-node { cursor: default; }
+    .insights-legend-dot { width: 10px; height: 10px; border-radius: 9999px; display: inline-block; flex: none; }
     .rec-badge { position: absolute; top: 8px; left: 8px; font-size: 10px; line-height: 1;
       padding: 3px 7px; border-radius: 9999px; background: rgba(124,92,255,.92); color: #fff;
       letter-spacing: .04em; }
@@ -354,6 +350,9 @@
           </span>
           <button id="recTrainBtn" type="button" class="btn btn-primary text-white text-xs font-semibold px-2.5 py-1.5 rounded-lg" aria-label="Improve recommendations">
             <i class="fa-solid fa-wand-magic-sparkles mr-1"></i>Improve
+          </button>
+          <button id="recInsightsBtn" type="button" class="btn bg-panel2 border border-line text-xs font-semibold px-2.5 py-1.5 rounded-lg" aria-label="View taste insights">
+            Insights
           </button>
           <button id="recRefreshBtn" type="button" class="btn bg-panel2 border border-line text-xs font-semibold px-2.5 py-1.5 rounded-lg" aria-label="Refresh recommendations">
             <i class="fa-solid fa-rotate-right mr-1"></i>Refresh
@@ -553,7 +552,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 23</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 24</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -633,6 +632,26 @@
         </button>
       </div>
       <div id="recDetailBody" class="space-y-3"></div>
+    </div>
+  </div>
+
+  <!-- ===================== TASTE INSIGHTS MODAL ===================== -->
+  <div id="insightsModal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div id="insightsBackdrop" class="absolute inset-0 bg-black/70 backdrop-blur-sm"></div>
+    <div class="card relative z-10 max-w-3xl w-full p-5 space-y-4 max-h-[90vh] overflow-auto">
+      <div class="flex items-center justify-between gap-3">
+        <h3 class="font-display text-2xl">TASTE INSIGHTS</h3>
+        <button id="closeInsightsBtn" class="btn w-8 h-8 rounded-lg bg-panel2 border border-line text-slate-300" aria-label="Close">
+          <i class="fa-solid fa-xmark"></i>
+        </button>
+      </div>
+      <p class="text-xs text-slate-400 leading-relaxed">
+        A 2&#8209;D projection (PCA) of your 384&#8209;dimensional taste embeddings. Large diamonds are your
+        taste clusters (k&#8209;means centroids); filled circles are movies you liked, and ringed circles are
+        current recommendations &mdash; each positioned next to the cluster it matches best. Distances are
+        approximate because high&#8209;dimensional space is flattened to a plane.
+      </p>
+      <div id="insightsBody" class="space-y-3"></div>
     </div>
   </div>
 
@@ -2683,74 +2702,6 @@
     return sim * qualityScore(m);
   }
 
-  // Identify the dominant scoring factor for a hyper-concise justification badge.
-  // Compares the three vector-first signals — peer-centroid group vibe, the best
-  // match to the viewer's own positive history, and liked-genre overlap — and
-  // returns the matching `why` tag. A personal-history win returns the literal
-  // matched movie title; everything else returns a short constant label.
-  function computeRecommendationWhy(m, profile) {
-    // Whether more than one person is in the room. Solo sessions must never
-    // claim a recommendation "matches the group vibe".
-    const isGroupSession = !!(state && state.peers && state.peers.length > 1);
-    const emb = movieEmbedding(m);
-
-    // Best match to the viewer's own positive history (gives a title to show).
-    let bestFav = null;
-    if (isVector(emb) && profile.positiveSamples && profile.positiveSamples.length) {
-      for (const sample of profile.positiveSamples) {
-        const sim = cosineSimilarity(emb, sample.emb);
-        if (!bestFav || sim > bestFav.sim) bestFav = { title: sample.title, sim };
-      }
-    }
-    // Justification floor: a "because you watched X" claim is only honest when
-    // the embeddings are genuinely close. Below this similarity, drop it.
-    if (bestFav && bestFav.sim < 0.38) bestFav = null;
-
-    // Best match to a peer's centroid (the group vibe), excluding our own set.
-    let peerBest = -Infinity;
-    if (isVector(emb) && isGroupSession) {
-      const pv = (state && state.peerVectors) || {};
-      Object.keys(pv).forEach((pid) => {
-        if (pid === myId) return;
-        const list = pv[pid];
-        if (!Array.isArray(list)) return;
-        for (const v of list) {
-          if (!isVector(v)) continue;
-          const s = cosineSimilarity(emb, v);
-          if (s > peerBest) peerBest = s;
-        }
-      });
-    }
-
-    // Liked-genre overlap, normalised to roughly [0, 1] then dampened so it only
-    // wins the badge when the semantic (vector) signals are weak — embeddings
-    // already capture genre, so this is a fallback explanation, not a headline.
-    let genreVal = 0;
-    const lg = profile.likedGenres;
-    if (lg && lg.size) {
-      let maxg = 0;
-      lg.forEach((v) => { if (v > maxg) maxg = v; });
-      const cg = movieGenres(m);
-      if (maxg > 0 && cg.length) {
-        let sum = 0;
-        cg.forEach((g) => { sum += (lg.get(g) || 0); });
-        genreVal = 0.5 * (sum / (cg.length * maxg));
-      }
-    }
-
-    const drivers = [
-      { key: 'group', val: peerBest > -Infinity ? peerBest : -Infinity },
-      { key: 'fav',   val: bestFav ? bestFav.sim : -Infinity },
-      { key: 'genre', val: genreVal > 0 ? genreVal : -Infinity },
-    ];
-    drivers.sort((a, b) => b.val - a.val);
-    const top = drivers[0];
-    if (top.val === -Infinity) return isGroupSession ? 'Group Vibe' : 'Genre Match';
-    if (top.key === 'group') return 'Group Vibe';
-    if (top.key === 'fav') return bestFav.title;
-    return 'Genre Match';
-  }
-
   // Cold-start score: quality + small recency boost; no personalisation.
   function coldStartScore(m) {
     if (isObscureMovie(m)) return -Infinity;
@@ -2812,7 +2763,7 @@
 
   // ---------- main entry point ----------
   // Score the whole catalogue (excluding watched + already-nominated titles) and
-  // return a blended, ranked list of { movie, score, why, isNew, personalised } rows.
+  // return a blended, ranked list of { movie, score, isNew, personalised } rows.
   function computeRecommendations(maxResults = REC_CONFIG.maxResults, profile = null) {
     if (!MOVIE_DB.length) return [];
     if (!profile) profile = buildTasteProfile();
@@ -2826,9 +2777,6 @@
     // are suppressed from the feed entirely.
     const skipSet      = new Set(loadNotInterested().map((x) => normTitle(x.title)));
     const watchlistSet = new Set(loadWatchlist().map((x) => normTitle(x.title)));
-    // Titles the user rated in the taste-training flow ("interested") get a
-    // concise "Training" provenance badge when they surface in the feed.
-    const trainingSet  = new Set(loadInterested().map((x) => normTitle(x.title)));
     const candidates   = [];
     for (const m of MOVIE_DB) {
       if (!m || !m.title || !m.art) continue;
@@ -2843,16 +2791,14 @@
       }
       const nt = normTitle(m.title);
       if (seenSet.has(nt) || nominatedSet.has(nt) || skipSet.has(nt)) continue;
-      let score, why = null;
+      let score;
       if (personalised) {
         score = scoreCandidate(m, profile);
       } else {
         score = coldStartScore(m);
       }
       const onWatchlist = watchlistSet.has(nt);
-      if (onWatchlist) why = 'Watchlist';
-      else if (trainingSet.has(nt)) why = 'Training';
-      candidates.push({ movie: m, score, why, isNew: isNewMovie(m), personalised, fromWatchlist: onWatchlist });
+      candidates.push({ movie: m, score, isNew: isNewMovie(m), personalised, fromWatchlist: onWatchlist });
     }
     candidates.sort((a, b) => b.score - a.score);
     return blendRecommendations(candidates, maxResults);
@@ -2933,14 +2879,6 @@
     final.forEach((rec) => seen.add(normTitle(rec.movie.title)));
     saveSeenRecommendations(seen);
 
-    // Compute 'why' only for the final recommendations in this batch
-    if (profile === null) profile = buildTasteProfile();
-    final.forEach((rec) => {
-      if (!rec.why && rec.personalised) {
-        rec.why = computeRecommendationWhy(rec.movie, profile);
-      }
-    });
-
     return final;
   }
 
@@ -3002,10 +2940,6 @@
     const seen = seenIndicatorHtml(m.title);
     const safeTitle = escapeHtml(m.title);
     const onList = inWatchlist(m.title);
-    // Hyper-concise justification badge rendered directly next to the title.
-    const why = rec.why
-      ? `<span class="text-[10px] bg-panel2 text-accent2 px-1.5 py-0.5 rounded border border-line font-semibold mt-0.5 inline-block self-start max-w-full truncate" aria-label="Why this was recommended">${escapeHtml(rec.why)}</span>`
-      : '';
     return `
       <div class="rec-card" role="listitem" data-title="${safeTitle}" tabindex="0" aria-label="View details for ${safeTitle}">
         <div class="relative overflow-hidden rounded-t-xl">
@@ -3014,7 +2948,6 @@
         </div>
         <div class="p-2 flex flex-col gap-1 flex-1">
           <div class="rec-title text-xs font-medium leading-snug">${safeTitle}${m.year ? ` <span class="text-slate-500">(${escapeHtml(String(m.year))})</span>` : ''}</div>
-          ${why}
           <div class="mt-auto space-y-1">
             ${seen || lang ? `<div class="flex items-center gap-1 flex-wrap text-[11px]">${seen}${lang}</div>` : ''}
             ${ratings ? `<div class="text-[10px] text-slate-400 truncate">${ratings}</div>` : ''}
@@ -3077,15 +3010,245 @@
     if (modal) modal.classList.add('hidden');
   }
 
-  function wireRecommendationWhyPopovers(root) {
-    root.querySelectorAll('.rec-why-wrap').forEach((wrap) => {
-      const chip = wrap.querySelector('.rec-why');
-      if (!chip) return;
-      chip.addEventListener('click', (e) => {
-        e.stopPropagation();
-        wrap.classList.toggle('open');
-      });
+  // ---------- Taste Insights: cluster-map visualization ----------
+  // The recommender models the viewer as a set of K-Means taste centroids in a
+  // 384-dimensional embedding space. We cannot draw 384 axes, so this view
+  // projects the centroids and the relevant movies down to two dimensions with
+  // a small PCA (the two directions of greatest variance across the points on
+  // screen). PCA is honest about relative layout: clusters that sit apart in
+  // the full space stay apart on the plane, and a movie lands near the centroid
+  // whose embedding it most resembles. Distances are necessarily approximate.
+
+  // Distinct, legible cluster palette (cycled if there are more clusters).
+  const INSIGHT_COLORS = ['#7c5cff', '#22d3ee', '#f472b6', '#facc15', '#34d399',
+                          '#fb923c', '#60a5fa', '#a3e635'];
+
+  // Top-2 PCA of a list of equal-length vectors via power iteration on the
+  // (implicit) covariance matrix. Returns one [x, y] coordinate per input row.
+  function pca2d(vectors) {
+    const n = vectors.length;
+    if (!n) return [];
+    const dim = vectors[0].length;
+    // Mean-centre the rows.
+    const mean = new Float64Array(dim);
+    for (const v of vectors) for (let i = 0; i < dim; i++) mean[i] += v[i];
+    for (let i = 0; i < dim; i++) mean[i] /= n;
+    const X = vectors.map((v) => {
+      const r = new Float64Array(dim);
+      for (let i = 0; i < dim; i++) r[i] = v[i] - mean[i];
+      return r;
     });
+    const normalize = (v) => {
+      let mag = 0;
+      for (let i = 0; i < v.length; i++) mag += v[i] * v[i];
+      mag = Math.sqrt(mag);
+      if (!mag) return false;
+      for (let i = 0; i < v.length; i++) v[i] /= mag;
+      return true;
+    };
+    // Leading eigenvector of XᵀX (the principal direction), orthogonalised
+    // against any previously found components for the next axis.
+    function component(prev) {
+      const v = new Float64Array(dim);
+      for (let i = 0; i < dim; i++) v[i] = Math.sin((i + 1) * 12.9898 + prev.length);
+      const orth = (vec) => {
+        for (const e of prev) {
+          let d = 0;
+          for (let i = 0; i < dim; i++) d += vec[i] * e[i];
+          for (let i = 0; i < dim; i++) vec[i] -= d * e[i];
+        }
+      };
+      orth(v);
+      if (!normalize(v)) return new Float64Array(dim);
+      for (let iter = 0; iter < 64; iter++) {
+        // w = Xᵀ (X v)
+        const w = new Float64Array(dim);
+        for (let r = 0; r < X.length; r++) {
+          const row = X[r];
+          let proj = 0;
+          for (let i = 0; i < dim; i++) proj += row[i] * v[i];
+          for (let i = 0; i < dim; i++) w[i] += row[i] * proj;
+        }
+        orth(w);
+        if (!normalize(w)) break;
+        let dot = 0;
+        for (let i = 0; i < dim; i++) dot += w[i] * v[i];
+        for (let i = 0; i < dim; i++) v[i] = w[i];
+        if (Math.abs(dot) > 0.999999) break;
+      }
+      return v;
+    }
+    const pc1 = component([]);
+    const pc2 = component([pc1]);
+    return X.map((row) => {
+      let x = 0, y = 0;
+      for (let i = 0; i < dim; i++) { x += row[i] * pc1[i]; y += row[i] * pc2[i]; }
+      return [x, y];
+    });
+  }
+
+  // Index of the centroid most similar to `emb` (cosine), or -1 if none.
+  function nearestCentroid(emb, centroids) {
+    let best = -1, bestSim = -Infinity;
+    for (let c = 0; c < centroids.length; c++) {
+      const s = cosineSimilarity(emb, centroids[c]);
+      if (s > bestSim) { bestSim = s; best = c; }
+    }
+    return { index: best, sim: bestSim };
+  }
+
+  // Render the cluster map into #insightsBody from the current taste profile and
+  // the recommendations currently on screen.
+  function renderInsights() {
+    const body = $('#insightsBody');
+    if (!body) return;
+
+    const emptyMsg = (msg) =>
+      `<p class="text-sm text-slate-500 italic py-8 text-center">${escapeHtml(msg)}</p>`;
+
+    if (!window.EMBEDDINGS_BUFFER) {
+      body.innerHTML = emptyMsg('Recommendation vectors are still loading — try again in a moment.');
+      return;
+    }
+
+    const profile = buildTasteProfile();
+    const centroids = (profile.centroids || []).filter((c) => isVector(c));
+    if (!centroids.length) {
+      body.innerHTML = emptyMsg('Rate or train a few movies to build your taste clusters, then check back here.');
+      return;
+    }
+
+    // Liked movies that shaped the clusters (de-duplicated by title).
+    const likedSeen = new Set();
+    const liked = [];
+    (profile.positiveSamples || []).forEach((s) => {
+      if (!isVector(s.emb)) return;
+      const key = normTitle(s.title);
+      if (likedSeen.has(key)) return;
+      likedSeen.add(key);
+      liked.push({ title: s.title, emb: s.emb });
+    });
+
+    // Current recommendations on screen (so the viewer can see where the feed
+    // sits relative to their clusters).
+    const recs = [];
+    const recSeen = new Set();
+    ((recCache && recCache.list) || []).forEach((rec) => {
+      const m = rec.movie;
+      if (!m) return;
+      const emb = movieEmbedding(m);
+      if (!isVector(emb)) return;
+      const key = normTitle(m.title);
+      if (recSeen.has(key)) return;
+      recSeen.add(key);
+      recs.push({ title: m.title, emb });
+    });
+
+    // Assemble the points for a shared projection: centroids first, then liked
+    // movies, then recommendations — so every node lives in one coordinate frame.
+    const vectors = [];
+    centroids.forEach((c) => vectors.push(Array.from(c)));
+    liked.forEach((l) => vectors.push(Array.from(l.emb)));
+    recs.forEach((r) => vectors.push(Array.from(r.emb)));
+
+    const coords = pca2d(vectors);
+    const nc = centroids.length;
+    const centroidPts = coords.slice(0, nc);
+    const likedPts = coords.slice(nc, nc + liked.length);
+    const recPts = coords.slice(nc + liked.length);
+
+    // Scale projected coordinates into the SVG viewport.
+    const W = 620, H = 400, PAD = 40;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    coords.forEach(([x, y]) => {
+      if (x < minX) minX = x; if (x > maxX) maxX = x;
+      if (y < minY) minY = y; if (y > maxY) maxY = y;
+    });
+    const degenX = maxX - minX < 1e-9, degenY = maxY - minY < 1e-9;
+    const spanX = degenX ? 1 : maxX - minX, spanY = degenY ? 1 : maxY - minY;
+    const sx = (x) => degenX ? W / 2 : PAD + ((x - minX) / spanX) * (W - 2 * PAD);
+    const sy = (y) => degenY ? H / 2 : PAD + ((y - minY) / spanY) * (H - 2 * PAD);
+    const color = (i) => INSIGHT_COLORS[i % INSIGHT_COLORS.length];
+
+    const lines = [];      // movie → its centroid (cluster membership)
+    const centroidNodes = [];
+    const movieNodes = [];
+    const clusterStats = centroids.map(() => ({ liked: 0, recs: 0, top: null, topSim: -Infinity }));
+
+    // Liked movies: filled circles tied to their nearest centroid.
+    liked.forEach((l, i) => {
+      const { index, sim } = nearestCentroid(l.emb, centroids);
+      if (index < 0) return;
+      const px = sx(likedPts[i][0]), py = sy(likedPts[i][1]);
+      const cx = sx(centroidPts[index][0]), cy = sy(centroidPts[index][1]);
+      lines.push(`<line x1="${px.toFixed(1)}" y1="${py.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${cy.toFixed(1)}" stroke="${color(index)}" stroke-opacity="0.18" stroke-width="1"/>`);
+      movieNodes.push(`<circle class="insights-node" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4.5" fill="${color(index)}" fill-opacity="0.85"><title>${escapeHtml(l.title)} — Cluster ${index + 1} (liked, match ${(sim).toFixed(2)})</title></circle>`);
+      const st = clusterStats[index];
+      st.liked += 1;
+      if (sim > st.topSim) { st.topSim = sim; st.top = l.title; }
+    });
+
+    // Recommendations: ringed circles tied to their best-matching centroid.
+    recs.forEach((r, i) => {
+      const { index, sim } = nearestCentroid(r.emb, centroids);
+      if (index < 0) return;
+      const px = sx(recPts[i][0]), py = sy(recPts[i][1]);
+      const cx = sx(centroidPts[index][0]), cy = sy(centroidPts[index][1]);
+      lines.push(`<line x1="${px.toFixed(1)}" y1="${py.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${cy.toFixed(1)}" stroke="${color(index)}" stroke-opacity="0.12" stroke-width="1" stroke-dasharray="2 3"/>`);
+      movieNodes.push(`<circle class="insights-node" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="5" fill="#0b1020" stroke="${color(index)}" stroke-width="2"><title>${escapeHtml(r.title)} — recommended, best match Cluster ${index + 1} (${(sim).toFixed(2)})</title></circle>`);
+      clusterStats[index].recs += 1;
+    });
+
+    // Centroids: large diamonds with a numbered label.
+    centroids.forEach((c, i) => {
+      const cx = sx(centroidPts[i][0]), cy = sy(centroidPts[i][1]);
+      const r = 9;
+      const pts = `${cx},${(cy - r).toFixed(1)} ${(cx + r).toFixed(1)},${cy} ${cx},${(cy + r).toFixed(1)} ${(cx - r).toFixed(1)},${cy}`;
+      centroidNodes.push(
+        `<polygon class="insights-node" points="${pts}" fill="${color(i)}" stroke="#0b1020" stroke-width="1.5"><title>Cluster ${i + 1}</title></polygon>` +
+        `<text x="${cx.toFixed(1)}" y="${(cy - r - 5).toFixed(1)}" text-anchor="middle" font-size="11" font-weight="700" fill="${color(i)}">${i + 1}</text>`);
+    });
+
+    const svg = `
+      <svg class="insights-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Two-dimensional map of taste clusters and movies">
+        <g>${lines.join('')}</g>
+        <g>${movieNodes.join('')}</g>
+        <g>${centroidNodes.join('')}</g>
+      </svg>`;
+
+    const legendRows = centroids.map((c, i) => {
+      const st = clusterStats[i];
+      const rep = st.top ? `e.g. <span class="text-slate-300">${escapeHtml(st.top)}</span>` : 'no liked films yet';
+      return `
+        <div class="flex items-start gap-2 text-xs">
+          <span class="insights-legend-dot mt-0.5" style="background:${color(i)}"></span>
+          <div class="min-w-0">
+            <div class="font-semibold text-slate-200">Cluster ${i + 1}</div>
+            <div class="text-slate-400">${st.liked} liked · ${st.recs} recommended · ${rep}</div>
+          </div>
+        </div>`;
+    }).join('');
+
+    body.innerHTML = `
+      ${svg}
+      <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400 px-1">
+        <span><i class="fa-solid fa-diamond text-accent mr-1"></i>Taste cluster</span>
+        <span><i class="fa-solid fa-circle text-slate-400 mr-1"></i>Movie you liked</span>
+        <span><i class="fa-regular fa-circle text-slate-400 mr-1"></i>Recommendation</span>
+      </div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">${legendRows}</div>`;
+  }
+
+  function openInsights() {
+    const modal = $('#insightsModal');
+    if (!modal) return;
+    renderInsights();
+    modal.classList.remove('hidden');
+  }
+
+  function closeInsights() {
+    const modal = $('#insightsModal');
+    if (modal) modal.classList.add('hidden');
   }
 
   function recommendationDataStatus() {
@@ -3133,7 +3296,7 @@
     const hasMovieDbError = movieDbStatus === 'error';
     // Only relevant while nominating. If the catalogue fails to load, keep the
     // section visible so the status indicator can explain why.
-    if (state.phase !== 'lobby' || (!MOVIE_DB.length && !hasMovieDbError)) { section.classList.add('hidden'); closeRecommendationDetail(); return; }
+    if (state.phase !== 'lobby' || (!MOVIE_DB.length && !hasMovieDbError)) { section.classList.add('hidden'); closeRecommendationDetail(); closeInsights(); return; }
     renderRecommendationDataStatus();
     section.classList.remove('hidden');
 
@@ -3167,7 +3330,6 @@
     const canNominate = mine < MAX_NOMINATIONS;
     track.innerHTML = recs.map((rec) => recCardHtml(rec, canNominate)).join('');
     wireSeenIndicator(track);
-    wireRecommendationWhyPopovers(track);
     track.querySelectorAll('.rec-nominate').forEach((btn) => {
       if (btn.disabled) return;
       btn.addEventListener('click', () => dispatch({ type: 'nominate', title: btn.dataset.title }));
@@ -3197,11 +3359,11 @@
     });
     track.querySelectorAll('.rec-card').forEach((card) => {
       card.addEventListener('click', (e) => {
-        if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-why-wrap')) return;
+        if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched')) return;
         openRecommendationDetail(card.dataset.title || '');
       });
       card.addEventListener('keydown', (e) => {
-        if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-why-wrap')) return;
+        if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched')) return;
         e.preventDefault();
         openRecommendationDetail(card.dataset.title || '');
       });
@@ -3569,7 +3731,6 @@
         const tempDiv = document.createElement('div');
         tempDiv.innerHTML = nextBatch.map((rec) => recCardHtml(rec, canNominate)).join('');
         wireSeenIndicator(tempDiv);
-        wireRecommendationWhyPopovers(tempDiv);
         tempDiv.querySelectorAll('.rec-nominate').forEach((btn) => {
           if (btn.disabled) return;
           btn.addEventListener('click', () => dispatch({ type: 'nominate', title: btn.dataset.title }));
@@ -3599,11 +3760,11 @@
         });
         tempDiv.querySelectorAll('.rec-card').forEach((card) => {
           card.addEventListener('click', (e) => {
-            if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-why-wrap')) return;
+            if (e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched')) return;
             openRecommendationDetail(card.dataset.title || '');
           });
           card.addEventListener('keydown', (e) => {
-            if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched') || e.target.closest('.rec-why-wrap')) return;
+            if ((e.key !== 'Enter' && e.key !== ' ') || e.target.closest('.rec-nominate') || e.target.closest('.rec-watchlist') || e.target.closest('.rec-watched')) return;
             e.preventDefault();
             openRecommendationDetail(card.dataset.title || '');
           });
@@ -4903,9 +5064,13 @@
     $('#syncReceiveBtn').addEventListener('click', startSyncReceiveScan);
     $('#closeRecDetailBtn').addEventListener('click', closeRecommendationDetail);
     $('#recDetailBackdrop').addEventListener('click', closeRecommendationDetail);
+    $('#recInsightsBtn').addEventListener('click', openInsights);
+    $('#closeInsightsBtn').addEventListener('click', closeInsights);
+    $('#insightsBackdrop').addEventListener('click', closeInsights);
     document.addEventListener('keydown', (e) => {
       if (e.key === 'Escape') {
         closeRecommendationDetail();
+        closeInsights();
         closeRateModal();
       }
     });
@@ -4913,9 +5078,6 @@
     // Click-away closes the settings menu.
     document.addEventListener('click', (e) => {
       if (!$('#settingsWrap').contains(e.target)) closeSettingsMenu();
-      if (!e.target.closest('.rec-why-wrap')) {
-        document.querySelectorAll('.rec-why-wrap.open').forEach((node) => node.classList.remove('open'));
-      }
     });
 
     // Roll a fresh auto-generated nickname into the name field (same style as

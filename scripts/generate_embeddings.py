@@ -44,31 +44,31 @@ in place with the updated ``v_idx`` pointers.
 
 Backends
 --------
-* **Local (default)** — a lightweight Hugging Face sentence-transformers model
-  (``sentence-transformers/all-MiniLM-L6-v2``, 384 dims). Runs entirely offline
-  on CPU, no API key required.
+* **Gemini (default)** — pass ``--backend gemini`` (the default; or set
+  ``EMBED_BACKEND=gemini``) to use Google's ``gemini-embedding-2`` (3072 dims) via
+  the asynchronous **Batch API** (``client.batches.create_embeddings``), which
+  generates one embedding per movie at higher throughput and lower cost. Requires
+  ``GEMINI_API_KEY`` or ``GOOGLE_API_KEY``.
+* **Local** — pass ``--backend local`` to use a lightweight Hugging Face
+  sentence-transformers model (``sentence-transformers/all-MiniLM-L6-v2``, 384
+  dims). Runs entirely offline on CPU, no API key required.
 * **OpenAI** — pass ``--backend openai`` (or set ``EMBED_BACKEND=openai``) to use
   OpenAI's ``text-embedding-3-small``. Requires ``OPENAI_API_KEY``.
-* **Gemini** — pass ``--backend gemini`` (or set ``EMBED_BACKEND=gemini``) to use
-  Google's ``gemini-embedding-2`` via the asynchronous **Batch API**
-  (``client.batches.create_embeddings``), which generates one embedding per
-  movie at higher throughput and lower cost. Requires ``GEMINI_API_KEY`` or
-  ``GOOGLE_API_KEY``.
 
 Usage
 -----
-    pip install sentence-transformers protobuf    # local backend (default)
+    pip install google-genai protobuf             # gemini backend (default)
+    export GEMINI_API_KEY=AIza...
     python3 scripts/generate_embeddings.py --movies movies.pbf --embeddings embeddings.bin
+
+    # or, offline with sentence-transformers:
+    pip install sentence-transformers protobuf
+    python3 scripts/generate_embeddings.py --backend local
 
     # or, using OpenAI:
     pip install openai protobuf
     export OPENAI_API_KEY=sk-...
     python3 scripts/generate_embeddings.py --backend openai
-
-    # or, using Gemini:
-    pip install google-genai protobuf
-    export GEMINI_API_KEY=AIza...
-    python3 scripts/generate_embeddings.py --backend gemini
 """
 
 from __future__ import annotations
@@ -152,17 +152,18 @@ class Progress:
 LOCAL_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 OPENAI_MODEL = "text-embedding-3-small"
 
-# Vector dimensionality and on-disk record size. ``all-MiniLM-L6-v2`` emits 384
-# dims; OpenAI's ``text-embedding-3-small`` is 1536 by default but can be asked
-# to natively emit a lower dimensionality. The value is configurable via the
-# ``EMBED_DIM`` environment variable or the ``--dim`` flag so a build can switch
-# backend/dimension profiles; the on-disk layout (``EMBED_DIM * 4`` bytes per
-# movie) and the browser's ``Float32Array`` jump index both derive from it, so
-# they stay in lock-step automatically.
+# Vector dimensionality and on-disk record size. The default ``gemini-embedding-2``
+# backend emits up to 3072 dims; ``all-MiniLM-L6-v2`` emits 384 and OpenAI's
+# ``text-embedding-3-small`` is 1536 by default but can be asked to natively emit a
+# lower dimensionality. The value is configurable via the ``EMBED_DIM`` environment
+# variable or the ``--dim`` flag so a build can switch backend/dimension profiles;
+# the on-disk layout (``EMBED_DIM * 4`` bytes per movie) and the browser's
+# ``Float32Array`` jump index both derive from it, so they stay in lock-step
+# automatically.
 #
 # NOTE: the matching ``EMBED_DIM`` constant in ``index.html`` must equal whatever
 # dimensionality ``embeddings.bin`` is written with, since the file is headerless.
-DEFAULT_EMBED_DIM = 384
+DEFAULT_EMBED_DIM = 3072
 EMBED_DIM = int(os.environ.get("EMBED_DIM", DEFAULT_EMBED_DIM))
 BYTES_PER_VECTOR = EMBED_DIM * 4
 
@@ -423,8 +424,8 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--embeddings", "--output", dest="embeddings_path", default="embeddings.bin",
                         help="Path to the packed embeddings binary to write (default: embeddings.bin).")
     parser.add_argument("--backend", choices=("local", "openai", "gemini"),
-                        default=os.environ.get("EMBED_BACKEND", "local"),
-                        help="Embedding backend to use (default: local sentence-transformers).")
+                        default=os.environ.get("EMBED_BACKEND", "gemini"),
+                        help="Embedding backend to use (default: gemini).")
     parser.add_argument("--dim", type=int, default=EMBED_DIM,
                         help="Embedding dimensionality and on-disk record size "
                              "(default: %(default)s; also settable via EMBED_DIM env).")
