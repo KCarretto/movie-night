@@ -169,6 +169,18 @@
       border: 3px solid rgba(124,92,255,.25); border-top-color: #7c5cff;
       animation: spin .7s linear infinite; display: inline-block; }
     @keyframes spin { to { transform: rotate(360deg); } }
+    /* Skeleton shimmer shown in the carousel on first load while the embedding
+       vectors download, so we never flash un-personalised picks before they
+       arrive (a 30s timeout falls back to showing recs without embeddings). */
+    .rec-shimmer { cursor: default; }
+    .rec-shimmer:hover, .rec-shimmer:focus-within { border-color: #2a3242; }
+    .shimmer-block { position: relative; overflow: hidden; background: #1b2130; border-radius: 6px; }
+    .shimmer-block::after { content: ""; position: absolute; inset: 0;
+      transform: translateX(-100%);
+      background: linear-gradient(90deg, transparent, rgba(124,92,255,.14), transparent);
+      animation: shimmer 1.3s ease-in-out infinite; }
+    @keyframes shimmer { 100% { transform: translateX(100%); } }
+    .shimmer-poster { width: 100%; height: 200px; border-radius: 0; }
     .rec-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
       overflow: hidden; }
     /* Insights cluster map */
@@ -553,7 +565,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 28</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 29</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -647,10 +659,13 @@
         </button>
       </div>
       <p class="text-xs text-slate-400 leading-relaxed">
-        A 2&#8209;D projection (PCA) of your 3072&#8209;dimensional taste embeddings. Large diamonds are your
-        taste clusters (k&#8209;means centroids); filled circles are movies you liked, and ringed circles are
-        current recommendations &mdash; each positioned next to the cluster it matches best. Distances are
-        approximate because high&#8209;dimensional space is flattened to a plane.
+        2&#8209;D projections (PCA) of your 3072&#8209;dimensional taste embeddings. The first map shows
+        <span class="text-slate-300">your taste</span>: large diamonds are your clusters (k&#8209;means
+        centroids), filled circles are films you liked, and ringed circles are current recommendations.
+        The second shows the <span class="text-slate-300">group taste</span> &mdash; a secondary round of
+        k&#8209;means over everyone&#8217;s centroids, where filled circles are individual members&#8217;
+        tastes grouped under the shared clusters. Distances are approximate because high&#8209;dimensional
+        space is flattened to a plane.
       </p>
       <div id="insightsBody" class="space-y-3"></div>
     </div>
@@ -1074,6 +1089,10 @@
       console.warn('Could not load movies.pbf:', e);
     }
     indexMovieDb();
+    // Mark embeddings as loading up-front (when the catalogue is ready) so the
+    // very first recommendations render shows the shimmer rather than briefly
+    // flashing popularity-only picks before loadEmbeddings() flips the status.
+    if (movieDbStatus === 'ready') embeddingsStatus = 'loading';
     if (typeof renderAll === 'function') renderAll();
     if (movieDbStatus === 'ready') {
       // Lazy-load the (much larger) embeddings binary in the background so the UI
@@ -1185,6 +1204,11 @@
       list.push({ title: clean, rating: rating || 0, watchedAt: Date.now() });
     }
     saveWatched(list);
+    // A new watched/rating signal should reshape FUTURE recommendations without
+    // reshuffling the strip the user is currently browsing. recSignature()
+    // ignores local watched changes (so the visible batch is stable); flag the
+    // cached ranking stale so the next batch carved folds the signal in.
+    recRankingStale = true;
     shareSeen();
   }
 
@@ -2388,6 +2412,11 @@
     maxCentroids: 5,
     centroidIters: 6,
     dislikeAlpha: 0.5,
+    // Group-taste modelling: after every room member's personal centroids are
+    // gathered, a SECONDARY round of K-Means clusters them into up to this many
+    // shared "group taste" centroids so scoring max-pools over a compact set of
+    // consensus moods rather than every peer's raw centroids individually.
+    groupCentroids: 5,
     // Popularity floor: candidates below these TMDB footprints are treated as
     // too obscure to recommend. Legacy catalogue entries that predate the
     // popularity fields (voteCount === 0) are exempt until backfilled.
@@ -2559,6 +2588,32 @@
   }
 
 
+  // ---------- secondary clustering: group taste centroids ----------
+  // Group influence runs a SECOND round of K-Means over the room's individual
+  // taste centroids (the local viewer's own primary centroids plus every peer's
+  // centroid set synced over WebRTC). Collapsing dozens of per-person centroids
+  // into a handful of shared "group taste" clusters surfaces the moods the room
+  // genuinely has in common instead of letting any single peer's many centroids
+  // dominate the max-pool. Returns an array of normalised centroid vectors.
+  function computeGroupCentroids(localCentroids) {
+    const samples = [];
+    const pushSet = (vecs) => {
+      if (!Array.isArray(vecs)) return;
+      for (const v of vecs) {
+        if (isVector(v)) samples.push({ emb: Array.from(v), weight: 1 });
+      }
+    };
+    pushSet(localCentroids);
+    const pv = (state && state.peerVectors) || {};
+    Object.keys(pv).forEach((pid) => {
+      if (pid === myId) return;          // local centroids already added above
+      pushSet(pv[pid]);
+    });
+    if (!samples.length) return [];
+    return clusterCentroids(samples, REC_CONFIG.groupCentroids, REC_CONFIG.centroidIters);
+  }
+
+
   // Build a vector-first taste profile from the viewer's history. Positive
   // signals (rating > 2.5, watchlist, explicit interest) become weighted
   // embedding samples that K-Means partitions into up to maxCentroids distinct
@@ -2653,18 +2708,24 @@
     // re-enter renderAll() via dispatch and recurse, so it is the caller's job.
     _myCentroids = centroids;
 
-    return { centroids, dislikeAnchors, positiveSamples, likedGenres,
+    // Secondary K-Means: fold the room's individual centroids (ours + peers')
+    // into a compact set of shared group-taste centroids used for group-influence
+    // scoring and the group view of the insights modal.
+    const groupCentroids = computeGroupCentroids(centroids);
+
+    return { centroids, groupCentroids, dislikeAnchors, positiveSamples, likedGenres,
              watchedCount: watched.length, ratedCount: rated, hasSignal };
   }
 
   // ---------- candidate scoring ----------
-  // Vector-first scoring: max-pool the candidate's cosine similarity across every
-  // positive centroid in the room (the viewer's own K-Means centroids plus all
-  // peer centroid sets synced over WebRTC), so a film ranks on its single best
-  // match — it only needs to fit ONE distinct viewing mood. The score is damped
-  // by alignment with the viewer's dislike anchors and multiplied by the film's
-  // intrinsic critic quality. Year-agnostic — recency is handled by the blend
-  // step so vintage classics that perfectly match are never unfairly buried.
+  // Vector-first scoring: max-pool the candidate's cosine similarity across the
+  // viewer's own K-Means centroids PLUS the room's group-taste centroids (the
+  // secondary clustering of every member's centroids), so a film ranks on its
+  // single best match — it only needs to fit ONE distinct viewing mood, whether
+  // that mood is personal or shared by the room. The score is damped by alignment
+  // with the viewer's dislike anchors and multiplied by the film's intrinsic
+  // critic quality. Year-agnostic — recency is handled by the blend step so
+  // vintage classics that perfectly match are never unfairly buried.
   function scoreCandidate(m, profile) {
     // Discard obscure candidates (too few votes / too low popularity) so the
     // feed surfaces films people have actually heard of.
@@ -2674,7 +2735,8 @@
     // No embedding yet → fall back to intrinsic critic quality alone.
     if (!isVector(emb)) return qualityScore(m);
 
-    // Max-pooling over the room's positive centroids: local + every peer set.
+    // Max-pooling over the room's positive centroids: the viewer's own primary
+    // centroids plus the consolidated group-taste centroids.
     let best = -Infinity;
     if (profile.centroids) {
       for (const c of profile.centroids) {
@@ -2682,17 +2744,13 @@
         if (s > best) best = s;
       }
     }
-    const peerVectors = (state && state.peerVectors) || {};
-    Object.keys(peerVectors).forEach((pid) => {
-      if (pid === myId) return;                 // local centroids counted above
-      const list = peerVectors[pid];
-      if (!Array.isArray(list)) return;
-      for (const v of list) {
-        if (!isVector(v)) continue;
-        const s = cosineSimilarity(emb, v);
+    if (profile.groupCentroids) {
+      for (const c of profile.groupCentroids) {
+        if (!isVector(c)) continue;
+        const s = cosineSimilarity(emb, c);
         if (s > best) best = s;
       }
-    });
+    }
     // No usable taste vector anywhere yet → rank purely on quality.
     if (best === -Infinity) return qualityScore(m);
 
@@ -2842,8 +2900,13 @@
   // signature so a Refresh tap can render instantly, plus the cached full
   // ranking so replenishing a batch never re-scores the catalogue.
   let recPrecompute = { sig: null, ranked: null, batches: [] };
+  // When a new local "watched"/rating signal arrives we deliberately keep the
+  // visible strip stable (see recSignature) and instead flag the cached ranking
+  // as stale so the NEXT batch carved (on scroll / refresh / background
+  // precompute) reflects the signal. This is what makes marking a film watched
+  // from the carousel non-jarring: current cards stay put, future ones improve.
+  let recRankingStale = false;
   function recSignature() {
-    const w    = loadWatched().map((x) => normTitle(x.title) + ':' + (x.rating || 0)).join('|');
     const hist = loadHistory().length;
     // Training stores re-rank recs: interest levels and
     // not-interested marks all reshape the taste vector and candidate set.
@@ -2851,15 +2914,18 @@
     const ni   = loadNotInterested().map((x) => normTitle(x.title)).join('|');
     // Group-taste inputs: peers' shared seen lists + their taste vectors, plus
     // whether embeddings.bin has finished loading. Changes here re-rank recs.
+    // Our OWN seen entry is excluded so locally marking a film watched never
+    // reshuffles the strip the user is browsing (its new signal is folded into
+    // future batches via recRankingStale instead).
     const seen = (state && state.seen) || {};
-    const seenSig = Object.keys(seen).sort().map((pid) =>
+    const seenSig = Object.keys(seen).filter((pid) => pid !== myId).sort().map((pid) =>
       pid + ':' + (Array.isArray(seen[pid]) ? seen[pid].length : 0)).join('|');
     const pv = (state && state.peerVectors) || {};
     const pvSig = Object.keys(pv).sort().join('|');
     const embReady = window.EMBEDDINGS_BUFFER ? '1' : '0';
     // Active mood filters re-rank the candidate pool, so fold them into the sig.
     const filt = activeSelectedGenres.join(',') + '/' + activeSelectedLanguages.join(',');
-    return MOVIE_DB.length + '#' + w + '#' + hist
+    return MOVIE_DB.length + '#' + hist
          + '#' + intr + '#' + ni
          + '#' + seenSig + '#' + pvSig + '#' + embReady + '#' + filt;
   }
@@ -2900,8 +2966,22 @@
     if (forceRecompute || recPrecompute.sig !== sig) {
       if (!profile) profile = buildTasteProfile();
       recPrecompute = { sig, ranked: computeRecommendations(MOVIE_DB.length, profile), batches: [] };
+      recRankingStale = false;   // a fresh ranking already folds in every signal
     }
     return recPrecompute;
+  }
+
+  // Re-score the cached ranking IN PLACE when a local watched/rating signal has
+  // marked it stale, keeping the existing signature so the visible strip is left
+  // untouched while future batches (and the precompute queue) pick up the new
+  // signal. No-op until a ranking actually exists.
+  function refreshStaleRanking() {
+    if (!recRankingStale) return;
+    recRankingStale = false;
+    if (!recPrecompute || recPrecompute.ranked == null) return;
+    const profile = buildTasteProfile();
+    recPrecompute.ranked = computeRecommendations(MOVIE_DB.length, profile);
+    recPrecompute.batches = [];
   }
 
   // Pre-compute up to `count` additional batches in the background so a Refresh
@@ -2910,6 +2990,9 @@
     const sig = recSignature();
     const profile = buildTasteProfile();
     const pc = ensurePrecompute(sig, profile);
+    // Fold any pending local watched/rating signal into the ranking before
+    // filling the queue so freshly-queued batches reflect it.
+    refreshStaleRanking();
     while (pc.batches.length < count) {
       const batch = nextRecBatch(pc.ranked, profile);
       if (!batch.length) break;       // exhausted the unseen catalogue
@@ -3117,65 +3200,22 @@
 
   // Render the cluster map into #insightsBody from the current taste profile and
   // the recommendations currently on screen.
-  function renderInsights() {
-    const body = $('#insightsBody');
-    if (!body) return;
-
-    const emptyMsg = (msg) =>
-      `<p class="text-sm text-slate-500 italic py-8 text-center">${escapeHtml(msg)}</p>`;
-
-    if (!window.EMBEDDINGS_BUFFER) {
-      body.innerHTML = emptyMsg('Recommendation vectors are still loading — try again in a moment.');
-      return;
-    }
-
-    const profile = buildTasteProfile();
-    const centroids = (profile.centroids || []).filter((c) => isVector(c));
-    if (!centroids.length) {
-      body.innerHTML = emptyMsg('Rate or train a few movies to build your taste clusters, then check back here.');
-      return;
-    }
-
-    // Liked movies that shaped the clusters (de-duplicated by title).
-    const likedSeen = new Set();
-    const liked = [];
-    (profile.positiveSamples || []).forEach((s) => {
-      if (!isVector(s.emb)) return;
-      const key = normTitle(s.title);
-      if (likedSeen.has(key)) return;
-      likedSeen.add(key);
-      liked.push({ title: s.title, emb: s.emb });
-    });
-
-    // Current recommendations on screen (so the viewer can see where the feed
-    // sits relative to their clusters).
-    const recs = [];
-    const recSeen = new Set();
-    ((recCache && recCache.list) || []).forEach((rec) => {
-      const m = rec.movie;
-      if (!m) return;
-      const emb = movieEmbedding(m);
-      if (!isVector(emb)) return;
-      const key = normTitle(m.title);
-      if (recSeen.has(key)) return;
-      recSeen.add(key);
-      recs.push({ title: m.title, emb });
-    });
-
-    // Assemble the points for a shared projection: centroids first, then liked
-    // movies, then recommendations — so every node lives in one coordinate frame.
+  // Build one cluster map (SVG + legend) from a set of centroids and a list of
+  // points ({ title?, emb, kind }) where kind is 'liked' | 'rec' | 'member'.
+  // Returns an HTML string; tooltips are wired separately via the shared
+  // .insights-container / .insights-tooltip hooks. `mode` ('personal'|'group')
+  // only tweaks the per-cluster legend copy.
+  function buildClusterMap(centroids, points, ariaLabel, mode) {
+    // One shared projection: centroids first, then every point, so all nodes
+    // live in the same coordinate frame.
     const vectors = [];
     centroids.forEach((c) => vectors.push(Array.from(c)));
-    liked.forEach((l) => vectors.push(Array.from(l.emb)));
-    recs.forEach((r) => vectors.push(Array.from(r.emb)));
-
+    points.forEach((p) => vectors.push(Array.from(p.emb)));
     const coords = pca2d(vectors);
     const nc = centroids.length;
     const centroidPts = coords.slice(0, nc);
-    const likedPts = coords.slice(nc, nc + liked.length);
-    const recPts = coords.slice(nc + liked.length);
+    const pointPts = coords.slice(nc);
 
-    // Scale projected coordinates into the SVG viewport.
     const W = 620, H = 400, PAD = 40;
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     coords.forEach(([x, y]) => {
@@ -3188,36 +3228,33 @@
     const sy = (y) => degenY ? H / 2 : PAD + ((y - minY) / spanY) * (H - 2 * PAD);
     const color = (i) => INSIGHT_COLORS[i % INSIGHT_COLORS.length];
 
-    const lines = [];      // movie → its centroid (cluster membership)
+    const lines = [];
     const centroidNodes = [];
     const movieNodes = [];
-    const clusterStats = centroids.map(() => ({ liked: 0, recs: 0, top: null, topSim: -Infinity }));
+    const clusterStats = centroids.map(() => ({ liked: 0, recs: 0, members: 0, top: null, topSim: -Infinity }));
 
-    // Liked movies: filled circles tied to their nearest centroid.
-    liked.forEach((l, i) => {
-      const { index, sim } = nearestCentroid(l.emb, centroids);
+    points.forEach((p, i) => {
+      const { index, sim } = nearestCentroid(p.emb, centroids);
       if (index < 0) return;
-      const px = sx(likedPts[i][0]), py = sy(likedPts[i][1]);
+      const px = sx(pointPts[i][0]), py = sy(pointPts[i][1]);
       const cx = sx(centroidPts[index][0]), cy = sy(centroidPts[index][1]);
-      lines.push(`<line x1="${px.toFixed(1)}" y1="${py.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${cy.toFixed(1)}" stroke="${color(index)}" stroke-opacity="0.18" stroke-width="1"/>`);
-      movieNodes.push(`<circle class="insights-node" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4.5" fill="${color(index)}" fill-opacity="0.85" data-title="${escapeHtml(l.title)}" data-info="Cluster ${index + 1} · Liked (match ${(sim).toFixed(2)})"></circle>`);
       const st = clusterStats[index];
-      st.liked += 1;
-      if (sim > st.topSim) { st.topSim = sim; st.top = l.title; }
+      if (p.kind === 'rec') {
+        lines.push(`<line x1="${px.toFixed(1)}" y1="${py.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${cy.toFixed(1)}" stroke="${color(index)}" stroke-opacity="0.12" stroke-width="1" stroke-dasharray="2 3"/>`);
+        movieNodes.push(`<circle class="insights-node" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="5" fill="#0b1020" stroke="${color(index)}" stroke-width="2" data-title="${escapeHtml(p.title)}" data-info="Cluster ${index + 1} · Match ${(sim).toFixed(2)}"></circle>`);
+        st.recs += 1;
+      } else if (p.kind === 'member') {
+        lines.push(`<line x1="${px.toFixed(1)}" y1="${py.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${cy.toFixed(1)}" stroke="${color(index)}" stroke-opacity="0.18" stroke-width="1"/>`);
+        movieNodes.push(`<circle class="insights-node" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4" fill="${color(index)}" fill-opacity="0.7"><title>Cluster ${index + 1} · a room member's taste</title></circle>`);
+        st.members += 1;
+      } else {
+        lines.push(`<line x1="${px.toFixed(1)}" y1="${py.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${cy.toFixed(1)}" stroke="${color(index)}" stroke-opacity="0.18" stroke-width="1"/>`);
+        movieNodes.push(`<circle class="insights-node" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4.5" fill="${color(index)}" fill-opacity="0.85" data-title="${escapeHtml(p.title)}" data-info="Cluster ${index + 1} · Liked (match ${(sim).toFixed(2)})"></circle>`);
+        st.liked += 1;
+        if (sim > st.topSim) { st.topSim = sim; st.top = p.title; }
+      }
     });
 
-    // Recommendations: ringed circles tied to their best-matching centroid.
-    recs.forEach((r, i) => {
-      const { index, sim } = nearestCentroid(r.emb, centroids);
-      if (index < 0) return;
-      const px = sx(recPts[i][0]), py = sy(recPts[i][1]);
-      const cx = sx(centroidPts[index][0]), cy = sy(centroidPts[index][1]);
-      lines.push(`<line x1="${px.toFixed(1)}" y1="${py.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${cy.toFixed(1)}" stroke="${color(index)}" stroke-opacity="0.12" stroke-width="1" stroke-dasharray="2 3"/>`);
-      movieNodes.push(`<circle class="insights-node" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="5" fill="#0b1020" stroke="${color(index)}" stroke-width="2" data-title="${escapeHtml(r.title)}" data-info="Cluster ${index + 1} · Match ${(sim).toFixed(2)}"></circle>`);
-      clusterStats[index].recs += 1;
-    });
-
-    // Centroids: large diamonds with a numbered label.
     centroids.forEach((c, i) => {
       const cx = sx(centroidPts[i][0]), cy = sy(centroidPts[i][1]);
       const r = 9;
@@ -3229,39 +3266,49 @@
 
     const svg = `
       <div class="relative insights-container">
-        <svg class="insights-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Two-dimensional map of taste clusters and movies">
+        <svg class="insights-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="${escapeHtml(ariaLabel)}">
           <g>${lines.join('')}</g>
           <g>${movieNodes.join('')}</g>
           <g>${centroidNodes.join('')}</g>
         </svg>
-        <div id="insightsTooltip" class="hidden absolute pointer-events-none bg-panel border border-line rounded-lg p-2 shadow-xl z-50 flex flex-col gap-1 items-center w-28 text-center -translate-x-1/2 -translate-y-full"></div>
+        <div class="insights-tooltip hidden absolute pointer-events-none bg-panel border border-line rounded-lg p-2 shadow-xl z-50 flex flex-col gap-1 items-center w-28 text-center -translate-x-1/2 -translate-y-full"></div>
       </div>`;
 
     const legendRows = centroids.map((c, i) => {
       const st = clusterStats[i];
-      const rep = st.top ? `e.g. <span class="text-slate-300">${escapeHtml(st.top)}</span>` : 'no liked films yet';
+      const detail = mode === 'group'
+        ? `${st.members} member taste${st.members === 1 ? '' : 's'} · ${st.recs} recommended`
+        : `${st.liked} liked · ${st.recs} recommended · ${st.top ? `e.g. <span class="text-slate-300">${escapeHtml(st.top)}</span>` : 'no liked films yet'}`;
       return `
         <div class="flex items-start gap-2 text-xs">
           <span class="insights-legend-dot mt-0.5" style="background:${color(i)}"></span>
           <div class="min-w-0">
             <div class="font-semibold text-slate-200">Cluster ${i + 1}</div>
-            <div class="text-slate-400">${st.liked} liked · ${st.recs} recommended · ${rep}</div>
+            <div class="text-slate-400">${detail}</div>
           </div>
         </div>`;
     }).join('');
 
-    body.innerHTML = `
-      ${svg}
-      <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400 px-1 mt-2">
-        <span><i class="fa-solid fa-diamond text-accent mr-1"></i>Taste cluster</span>
-        <span><i class="fa-solid fa-circle text-slate-400 mr-1"></i>Movie you liked</span>
-        <span><i class="fa-regular fa-circle text-slate-400 mr-1"></i>Recommendation</span>
-      </div>
-      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">${legendRows}</div>`;
+    const legendKey = mode === 'group'
+      ? `<span><i class="fa-solid fa-diamond text-accent mr-1"></i>Group cluster</span>
+         <span><i class="fa-solid fa-circle text-slate-400 mr-1"></i>A member's taste</span>
+         <span><i class="fa-regular fa-circle text-slate-400 mr-1"></i>Recommendation</span>`
+      : `<span><i class="fa-solid fa-diamond text-accent mr-1"></i>Taste cluster</span>
+         <span><i class="fa-solid fa-circle text-slate-400 mr-1"></i>Movie you liked</span>
+         <span><i class="fa-regular fa-circle text-slate-400 mr-1"></i>Recommendation</span>`;
 
-    const container = body.querySelector('.insights-container');
-    const tooltip = body.querySelector('#insightsTooltip');
-    if (container && tooltip) {
+    return `
+      ${svg}
+      <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400 px-1 mt-2">${legendKey}</div>
+      <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">${legendRows}</div>`;
+  }
+
+  // Attach the shared hover tooltip behaviour to every cluster-map container
+  // currently in `root` (both the personal and group maps).
+  function wireInsightsTooltips(root) {
+    root.querySelectorAll('.insights-container').forEach((container) => {
+      const tooltip = container.querySelector('.insights-tooltip');
+      if (!tooltip) return;
       container.addEventListener('mousemove', (e) => {
         const node = e.target.closest('.insights-node');
         if (node && node.dataset.title) {
@@ -3284,10 +3331,101 @@
           tooltip.classList.add('hidden');
         }
       });
-      container.addEventListener('mouseleave', () => {
-        tooltip.classList.add('hidden');
-      });
+      container.addEventListener('mouseleave', () => tooltip.classList.add('hidden'));
+    });
+  }
+
+  // Render BOTH the personal taste map and the group taste map into
+  // #insightsBody from the current taste profile and the on-screen recs.
+  function renderInsights() {
+    const body = $('#insightsBody');
+    if (!body) return;
+
+    const emptyMsg = (msg) =>
+      `<p class="text-sm text-slate-500 italic py-8 text-center">${escapeHtml(msg)}</p>`;
+    const sectionTitle = (t, sub) =>
+      `<div class="space-y-0.5"><h4 class="font-display text-lg tracking-wide">${escapeHtml(t)}</h4>` +
+      `<p class="text-[11px] text-slate-500">${escapeHtml(sub)}</p></div>`;
+
+    if (!window.EMBEDDINGS_BUFFER) {
+      body.innerHTML = emptyMsg('Recommendation vectors are still loading — try again in a moment.');
+      return;
     }
+
+    const profile = buildTasteProfile();
+    const centroids = (profile.centroids || []).filter((c) => isVector(c));
+    if (!centroids.length) {
+      body.innerHTML = emptyMsg('Rate or train a few movies to build your taste clusters, then check back here.');
+      return;
+    }
+
+    // Liked movies that shaped the personal clusters (de-duplicated by title).
+    const likedSeen = new Set();
+    const liked = [];
+    (profile.positiveSamples || []).forEach((s) => {
+      if (!isVector(s.emb)) return;
+      const key = normTitle(s.title);
+      if (likedSeen.has(key)) return;
+      likedSeen.add(key);
+      liked.push({ title: s.title, emb: s.emb, kind: 'liked' });
+    });
+
+    // Current recommendations on screen (shared by both maps so the viewer can
+    // see where the feed sits relative to each set of clusters).
+    const recs = [];
+    const recSeen = new Set();
+    ((recCache && recCache.list) || []).forEach((rec) => {
+      const m = rec.movie;
+      if (!m) return;
+      const emb = movieEmbedding(m);
+      if (!isVector(emb)) return;
+      const key = normTitle(m.title);
+      if (recSeen.has(key)) return;
+      recSeen.add(key);
+      recs.push({ title: m.title, emb, kind: 'rec' });
+    });
+
+    // ---- Personal map: your centroids + liked films + current recs ----
+    const personalMap = buildClusterMap(
+      centroids, liked.concat(recs),
+      'Two-dimensional map of your taste clusters and movies', 'personal');
+
+    // ---- Group map: the room's group-taste centroids (secondary K-Means) plus
+    // every member's individual taste centroids and the current recs ----
+    const groupCentroids = (profile.groupCentroids || []).filter((c) => isVector(c));
+    const memberPoints = [];
+    centroids.forEach((c) => memberPoints.push({ emb: Array.from(c), kind: 'member' }));
+    const pv = (state && state.peerVectors) || {};
+    let peerCount = 0;
+    Object.keys(pv).forEach((pid) => {
+      if (pid === myId) return;
+      const list = pv[pid];
+      if (!Array.isArray(list)) return;
+      let added = 0;
+      list.forEach((v) => { if (isVector(v)) { memberPoints.push({ emb: Array.from(v), kind: 'member' }); added++; } });
+      if (added) peerCount += 1;
+    });
+
+    let groupHtml;
+    if (peerCount > 0 && groupCentroids.length) {
+      groupHtml = buildClusterMap(
+        groupCentroids, memberPoints.concat(recs),
+        'Two-dimensional map of the group taste clusters and members', 'group');
+    } else {
+      groupHtml = emptyMsg('Group taste appears once other people join the room and share their tastes.');
+    }
+
+    body.innerHTML = `
+      <div class="space-y-3">
+        ${sectionTitle('Your taste', 'Your own liked films clustered into preference centroids.')}
+        ${personalMap}
+      </div>
+      <div class="space-y-3 pt-4 mt-2 border-t border-line">
+        ${sectionTitle('Group taste', 'A second round of K-Means over everyone\u2019s centroids — the moods the room shares.')}
+        ${groupHtml}
+      </div>`;
+
+    wireInsightsTooltips(body);
   }
 
   function openInsights() {
@@ -3336,6 +3474,49 @@
     dot.classList.toggle('pulse', status.level === 'loading');
   }
 
+  // ---- First-load shimmer -------------------------------------------------
+  // Embeddings power personalised scoring but download in the background after
+  // the catalogue. On the very first display we show a skeleton shimmer rather
+  // than flashing un-embedded (popularity-only) picks, then fall back to showing
+  // recommendations without embeddings if they still haven't arrived after a
+  // timeout so the carousel is never blocked indefinitely.
+  const REC_EMBEDDINGS_TIMEOUT_MS = 30000;
+  let recEmbeddingsTimedOut = false;
+  let recShimmerTimer = null;
+
+  // Should we hold the carousel on the shimmer? Only before embeddings have
+  // loaded, while they're still downloading (not errored), and before the
+  // fallback timeout has fired.
+  function recEmbeddingsPending() {
+    return !window.EMBEDDINGS_BUFFER
+        && embeddingsStatus !== 'error'
+        && embeddingsStatus !== 'idle'
+        && !recEmbeddingsTimedOut;
+  }
+
+  function clearRecShimmerTimer() {
+    if (recShimmerTimer != null) { clearTimeout(recShimmerTimer); recShimmerTimer = null; }
+  }
+
+  // Paint a row of skeleton cards into the carousel while embeddings load.
+  function renderRecShimmer(track) {
+    const card = `
+      <div class="rec-card rec-shimmer" role="listitem" aria-hidden="true">
+        <div class="relative overflow-hidden rounded-t-xl">
+          <div class="shimmer-block shimmer-poster"></div>
+        </div>
+        <div class="p-2 flex flex-col gap-2 flex-1">
+          <div class="shimmer-block" style="height:12px;width:85%"></div>
+          <div class="shimmer-block" style="height:12px;width:55%"></div>
+          <div class="mt-auto flex flex-col gap-1.5">
+            <div class="shimmer-block" style="height:26px;width:100%"></div>
+            <div class="shimmer-block" style="height:26px;width:100%"></div>
+          </div>
+        </div>
+      </div>`;
+    track.innerHTML = card.repeat(8);
+  }
+
   function renderRecommendations(forceRefresh = false) {
     const section = $('#phaseRecommend');
     const track = $('#recTrack');
@@ -3359,6 +3540,25 @@
       }
       return;
     }
+
+    // Hold on a skeleton shimmer until the embedding vectors land (or the
+    // fallback timeout fires) so the first recommendations the user sees are
+    // embedding-powered rather than popularity-only placeholders.
+    if (recEmbeddingsPending()) {
+      renderRecShimmer(track);
+      if (empty) empty.classList.add('hidden');
+      if (subtitle) subtitle.textContent = 'Personalising…';
+      if (recShimmerTimer == null) {
+        recShimmerTimer = setTimeout(() => {
+          recShimmerTimer = null;
+          recEmbeddingsTimedOut = true;
+          renderRecommendations();
+        }, REC_EMBEDDINGS_TIMEOUT_MS);
+      }
+      return;
+    }
+    // Embeddings are ready (or we've given up waiting): drop any pending timer.
+    clearRecShimmerTimer();
 
     const { list: recs, personalised, totalAvailable } = getRecommendations({ forceRefresh });
 
@@ -3606,6 +3806,10 @@
     if (modal) modal.classList.add('hidden');
     hideTrainRate();
     renderAll();
+    // The training flow is an explicit "improve my recommendations" action, so
+    // force a fresh ranking on close to surface the newly-gathered signals
+    // (local watched ratings no longer change recSignature on their own).
+    refreshRecommendations();
   }
 
   // Advance to the next training card, rebuilding the queue when it empties so
@@ -3780,6 +3984,9 @@
     if (shouldAppend) {
       const profile = buildTasteProfile();
       const pc = ensurePrecompute(recCache.sig || recSignature(), profile);
+      // Re-score in place if a local watched/rating signal is pending so the
+      // batch we are about to append reflects the newest taste signal.
+      refreshStaleRanking();
       const nextBatch = pc.batches.length ? pc.batches.shift() : nextRecBatch(pc.ranked, profile);
       if (nextBatch && nextBatch.length) {
         recCache.list = recCache.list.concat(nextBatch);
