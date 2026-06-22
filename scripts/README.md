@@ -88,7 +88,15 @@ python3 scripts/generate_embeddings.py --movies movies.pbf --embeddings embeddin
 - Resumes by default: because the catalogue is append-only, vectors already in
   `embeddings.bin` are reused and only newly added titles are embedded. The script
   rewrites `movies.pbf` in place with the updated `v_idx` pointers.
-- Pass `--backend openai` (with `OPENAI_API_KEY`) to use OpenAI embeddings instead.
+- Pass `--backend openai` (with `OPENAI_API_KEY`) to use OpenAI embeddings
+  instead. The OpenAI backend requests the target dimensionality **natively**
+  (the API `dimensions` parameter) rather than slicing the default 1536-dim
+  vector, which would corrupt the latent space.
+- The vector size is configurable via `--dim` (or the `EMBED_DIM` env var,
+  default `384`). The on-disk record size and the browser's `v_idx × dim × 4`
+  jump offset both derive from it, so they stay in lock-step — but the matching
+  `EMBED_DIM` constant in `index.html` must be updated to the same value, since
+  `embeddings.bin` is headerless.
 
 ## Automating it
 
