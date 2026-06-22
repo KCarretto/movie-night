@@ -175,6 +175,7 @@
     .insights-svg { width: 100%; height: auto; display: block; background:
       radial-gradient(circle at 50% 40%, rgba(124,92,255,.06), transparent 70%); border-radius: 12px; }
     .insights-node { cursor: default; }
+    .insights-node[data-title] { cursor: pointer; }
     .insights-legend-dot { width: 10px; height: 10px; border-radius: 9999px; display: inline-block; flex: none; }
     .rec-badge { position: absolute; top: 8px; left: 8px; font-size: 10px; line-height: 1;
       padding: 3px 7px; border-radius: 9999px; background: rgba(124,92,255,.92); color: #fff;
@@ -552,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 26</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 27</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -646,7 +647,7 @@
         </button>
       </div>
       <p class="text-xs text-slate-400 leading-relaxed">
-        A 2&#8209;D projection (PCA) of your 384&#8209;dimensional taste embeddings. Large diamonds are your
+        A 2&#8209;D projection (PCA) of your 3072&#8209;dimensional taste embeddings. Large diamonds are your
         taste clusters (k&#8209;means centroids); filled circles are movies you liked, and ringed circles are
         current recommendations &mdash; each positioned next to the cluster it matches best. Distances are
         approximate because high&#8209;dimensional space is flattened to a plane.
@@ -1198,7 +1199,7 @@
   }
 
   // My current K-Means taste centroids: a 2D array of normalised preference
-  // vectors ([[384 floats], ...]) computed by buildTasteProfile(). Cached so the
+  // vectors ([[3072 floats], ...]) computed by buildTasteProfile(). Cached so the
   // broadcast path never recurses through buildTasteProfile → shareVector.
   let _myCentroids = null;
 
@@ -1766,7 +1767,7 @@
 
       case 'setVector': {
         // A peer shares their K-Means taste centroids — a nested 2D array of
-        // preference vectors ([[384 floats], ...]) — so the room can score
+        // preference vectors ([[3072 floats], ...]) — so the room can score
         // candidates against every distinct viewing mood present.
         if (!state.peers.some((p) => p.id === fromId)) return;
         if (!state.peerVectors) state.peerVectors = {};
@@ -3023,7 +3024,7 @@
 
   // ---------- Taste Insights: cluster-map visualization ----------
   // The recommender models the viewer as a set of K-Means taste centroids in a
-  // 384-dimensional embedding space. We cannot draw 384 axes, so this view
+  // 3072-dimensional embedding space. We cannot draw 3072 axes, so this view
   // projects the centroids and the relevant movies down to two dimensions with
   // a small PCA (the two directions of greatest variance across the points on
   // screen). PCA is honest about relative layout: clusters that sit apart in
@@ -3193,7 +3194,7 @@
       const px = sx(likedPts[i][0]), py = sy(likedPts[i][1]);
       const cx = sx(centroidPts[index][0]), cy = sy(centroidPts[index][1]);
       lines.push(`<line x1="${px.toFixed(1)}" y1="${py.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${cy.toFixed(1)}" stroke="${color(index)}" stroke-opacity="0.18" stroke-width="1"/>`);
-      movieNodes.push(`<circle class="insights-node" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4.5" fill="${color(index)}" fill-opacity="0.85"><title>${escapeHtml(l.title)} — Cluster ${index + 1} (liked, match ${(sim).toFixed(2)})</title></circle>`);
+      movieNodes.push(`<circle class="insights-node" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="4.5" fill="${color(index)}" fill-opacity="0.85" data-title="${escapeHtml(l.title)}" data-info="Cluster ${index + 1} · Liked (match ${(sim).toFixed(2)})"></circle>`);
       const st = clusterStats[index];
       st.liked += 1;
       if (sim > st.topSim) { st.topSim = sim; st.top = l.title; }
@@ -3206,7 +3207,7 @@
       const px = sx(recPts[i][0]), py = sy(recPts[i][1]);
       const cx = sx(centroidPts[index][0]), cy = sy(centroidPts[index][1]);
       lines.push(`<line x1="${px.toFixed(1)}" y1="${py.toFixed(1)}" x2="${cx.toFixed(1)}" y2="${cy.toFixed(1)}" stroke="${color(index)}" stroke-opacity="0.12" stroke-width="1" stroke-dasharray="2 3"/>`);
-      movieNodes.push(`<circle class="insights-node" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="5" fill="#0b1020" stroke="${color(index)}" stroke-width="2"><title>${escapeHtml(r.title)} — recommended, best match Cluster ${index + 1} (${(sim).toFixed(2)})</title></circle>`);
+      movieNodes.push(`<circle class="insights-node" cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="5" fill="#0b1020" stroke="${color(index)}" stroke-width="2" data-title="${escapeHtml(r.title)}" data-info="Cluster ${index + 1} · Match ${(sim).toFixed(2)}"></circle>`);
       clusterStats[index].recs += 1;
     });
 
@@ -3221,11 +3222,14 @@
     });
 
     const svg = `
-      <svg class="insights-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Two-dimensional map of taste clusters and movies">
-        <g>${lines.join('')}</g>
-        <g>${movieNodes.join('')}</g>
-        <g>${centroidNodes.join('')}</g>
-      </svg>`;
+      <div class="relative insights-container">
+        <svg class="insights-svg" viewBox="0 0 ${W} ${H}" role="img" aria-label="Two-dimensional map of taste clusters and movies">
+          <g>${lines.join('')}</g>
+          <g>${movieNodes.join('')}</g>
+          <g>${centroidNodes.join('')}</g>
+        </svg>
+        <div id="insightsTooltip" class="hidden absolute pointer-events-none bg-panel border border-line rounded-lg p-2 shadow-xl z-50 flex flex-col gap-1 items-center w-28 text-center -translate-x-1/2 -translate-y-full"></div>
+      </div>`;
 
     const legendRows = centroids.map((c, i) => {
       const st = clusterStats[i];
@@ -3242,12 +3246,42 @@
 
     body.innerHTML = `
       ${svg}
-      <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400 px-1">
+      <div class="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400 px-1 mt-2">
         <span><i class="fa-solid fa-diamond text-accent mr-1"></i>Taste cluster</span>
         <span><i class="fa-solid fa-circle text-slate-400 mr-1"></i>Movie you liked</span>
         <span><i class="fa-regular fa-circle text-slate-400 mr-1"></i>Recommendation</span>
       </div>
       <div class="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">${legendRows}</div>`;
+
+    const container = body.querySelector('.insights-container');
+    const tooltip = body.querySelector('#insightsTooltip');
+    if (container && tooltip) {
+      container.addEventListener('mousemove', (e) => {
+        const node = e.target.closest('.insights-node');
+        if (node && node.dataset.title) {
+          const title = node.dataset.title;
+          const info = node.dataset.info || '';
+          const m = movieMeta(title);
+          tooltip.innerHTML = `
+            <div class="shrink-0 mb-1">${posterHtml(m || { title }, 'w-16 h-24')}</div>
+            <div class="text-[11px] font-semibold text-slate-100 leading-tight max-w-[100px] break-words">${escapeHtml(title)}</div>
+            ${info ? `<div class="text-[9px] text-slate-400 mt-0.5 leading-tight">${escapeHtml(info)}</div>` : ''}
+          `;
+          const containerRect = container.getBoundingClientRect();
+          const nodeRect = node.getBoundingClientRect();
+          const x = nodeRect.left - containerRect.left + nodeRect.width / 2;
+          const y = nodeRect.top - containerRect.top;
+          tooltip.style.left = `${x}px`;
+          tooltip.style.top = `${y - 8}px`;
+          tooltip.classList.remove('hidden');
+        } else {
+          tooltip.classList.add('hidden');
+        }
+      });
+      container.addEventListener('mouseleave', () => {
+        tooltip.classList.add('hidden');
+      });
+    }
   }
 
   function openInsights() {
