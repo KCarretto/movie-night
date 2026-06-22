@@ -92,6 +92,10 @@ python3 scripts/generate_embeddings.py --movies movies.pbf --embeddings embeddin
   instead. The OpenAI backend requests the target dimensionality **natively**
   (the API `dimensions` parameter) rather than slicing the default 1536-dim
   vector, which would corrupt the latent space.
+- Pass `--backend gemini` (with `GEMINI_API_KEY` or `GOOGLE_API_KEY`) to use Google's
+  Gemini embeddings instead. The Gemini backend uses `google-genai` to generate
+  embeddings using `gemini-embedding-2` model and requests the target dimensionality
+  natively (`output_dimensionality`).
 - The vector size is configurable via `--dim` (or the `EMBED_DIM` env var,
   default `384`). The on-disk record size and the browser's `v_idx × dim × 4`
   jump offset both derive from it, so they stay in lock-step — but the matching
