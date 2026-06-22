@@ -213,6 +213,14 @@ class OpenAIBackend:
 class GeminiBackend:
     """Google Gemini embedding backend. Requires GEMINI_API_KEY or GOOGLE_API_KEY."""
 
+    # Gemini's embedding endpoint rejects requests whose batch is too large
+    # (the API caps the number of texts *and* the total token count per
+    # ``embed_content`` call). The script-level ``--batch-size`` controls how
+    # many movies are read/cached per loop, but it can be far larger than what a
+    # single API request accepts, so we sub-batch every call down to a safe size
+    # here regardless of the caller's batch size.
+    MAX_REQUEST_BATCH = 100
+
     def __init__(self, model_name: str = "gemini-embedding-2") -> None:
         from google import genai
 
@@ -224,19 +232,48 @@ class GeminiBackend:
         self._client = genai.Client(api_key=api_key.strip())
         self._model = model_name
 
+    def _embed_request(self, texts: Sequence[str], dim: int) -> List[List[float]]:
+        """Embed a single, already-sized batch and return one vector per input."""
+        resp = self._client.models.embed_content(
+            model=self._model,
+            contents=list(texts),
+            config={"output_dimensionality": dim},
+        )
+        embeddings = resp.embeddings or []
+        if len(embeddings) != len(texts):
+            raise RuntimeError(
+                f"Gemini returned {len(embeddings)} vectors for {len(texts)} inputs."
+            )
+        return [list(emb.values) for emb in embeddings]
+
+    def _embed_chunk(self, texts: Sequence[str], dim: int) -> List[List[float]]:
+        """Embed a chunk, recursively halving on API errors (e.g. token limits).
+
+        Gemini rejects a request when the batch is too large by *count* or by
+        *token total*. We can't know the token total ahead of time, so on any
+        request failure we split the chunk in half and retry each half, bottoming
+        out at one text per request. This keeps the run going on oversized inputs
+        instead of aborting the whole catalogue.
+        """
+        try:
+            return self._embed_request(texts, dim)
+        except Exception:
+            if len(texts) <= 1:
+                raise
+            mid = len(texts) // 2
+            return self._embed_chunk(texts[:mid], dim) + self._embed_chunk(texts[mid:], dim)
+
     def embed(self, texts: Sequence[str]) -> List[List[float]]:
         # Google's gemini-embedding-2 model supports up to 3072 dimensions.
         # If EMBED_DIM exceeds 3072, we cap the requested dimensionality
         # at 3072 and let pack_vector zero-pad the resulting vectors.
         dim = min(EMBED_DIM, 3072)
-        resp = self._client.models.embed_content(
-            model=self._model,
-            contents=list(texts),
-            config={"output_dimensionality": dim}
-        )
-        if not resp.embeddings:
-            return []
-        return [list(emb.values) for emb in resp.embeddings if emb.values is not None]
+        texts = list(texts)
+        vectors: List[List[float]] = []
+        for start in range(0, len(texts), self.MAX_REQUEST_BATCH):
+            chunk = texts[start : start + self.MAX_REQUEST_BATCH]
+            vectors.extend(self._embed_chunk(chunk, dim))
+        return vectors
 
 
 def make_backend(name: str):
