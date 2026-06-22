@@ -10,7 +10,13 @@ export default function TrainModal({ open, onClose, onRate }) {
   const rt = useStore();
   const [idx, setIdx] = useState(0);
   const picks = useMemo(() => {
-    const base = getRecommendations({ forceRefresh: true }).list.map((r) => r.movie);
+    // Only build the training set while the modal is actually open. The
+    // component stays mounted, so keying off `open` previously triggered the
+    // expensive recommendation recompute on both open and close — making the
+    // button feel slow to toggle. Reuse the already-precomputed ranking (no
+    // forceRefresh) so opening is instant, and skip all work when closed.
+    if (!open) return [];
+    const base = getRecommendations().list.map((r) => r.movie);
     if (base.length >= 12) return base.slice(0, 12);
     const extra = rt.MOVIE_DB.slice(0, 20).filter((m) => m?.art);
     return [...base, ...extra].slice(0, 12);
