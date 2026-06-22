@@ -552,7 +552,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 24</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 25</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -2392,6 +2392,10 @@
     // popularity fields (voteCount === 0) are exempt until backfilled.
     minVoteCount:  150,
     minPopularity: 2.0,
+    // Audience-trust credibility threshold: the vote count at (or above) which a
+    // film is considered to have a fully credible audience footprint and is not
+    // penalised by popularityTrust(). Below it, the trust factor scales toward 0.
+    credibilityThreshold: 10000,
     // Minimum number of rated/nominated titles needed before switching to
     // personalised mode (below this we use cold-start).
     personaliseThreshold: 3,
@@ -2450,14 +2454,19 @@
     return _maxVoteLog;
   }
 
-  // Audience trust factor P_trust = ln(votes + 1) / ln(maxVotes + 1), in [0, 1].
-  // Films with no recorded footprint (legacy entries) get a neutral 0.5 so they
-  // are neither boosted nor buried before the sync backfill populates votes.
+  // Audience trust factor, in [0, 1]. Films whose vote count reaches the
+  // configured credibility threshold are fully trusted (factor 1) and never
+  // penalised; below it the log-scaled vote count is normalised against the
+  // threshold so obscure-but-highly-rated films are damped. Films with no
+  // recorded footprint (legacy entries) get a neutral 0.5 so they are neither
+  // boosted nor buried before the sync backfill populates votes.
   function popularityTrust(m) {
     const votes = m && m.voteCount ? m.voteCount : 0;
     if (votes <= 0) return 0.5;
-    const denom = maxVoteLog();
-    if (denom <= 0) return 0.5;
+    const threshold = REC_CONFIG.credibilityThreshold;
+    if (!(threshold > 0)) return 0.5;
+    if (votes >= threshold) return 1;
+    const denom = Math.log(threshold + 1) || 1;
     return Math.max(0, Math.min(1, Math.log(votes + 1) / denom));
   }
 
@@ -2698,15 +2707,17 @@
       sim = Math.max(0, sim - REC_CONFIG.dislikeAlpha * dis);
     }
 
-    // Multiply the max-pooled similarity by the film's intrinsic critic quality.
-    return sim * qualityScore(m);
+    // Multiply the max-pooled similarity by the film's intrinsic critic quality
+    // and its audience-trust footprint so obscure-but-highly-rated films are
+    // damped relative to credibly-popular ones.
+    return sim * qualityScore(m) * popularityTrust(m);
   }
 
   // Cold-start score: quality + small recency boost; no personalisation.
   function coldStartScore(m) {
     if (isObscureMovie(m)) return -Infinity;
     const recency = isNewMovie(m) ? 0.15 : 0;
-    return qualityScore(m) + recency;
+    return (qualityScore(m) * popularityTrust(m)) + recency;
   }
 
   // ---------- blend ----------
