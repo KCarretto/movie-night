@@ -3,7 +3,7 @@ import { MAX_NOMINATIONS } from '../lib/constants.js';
 import { emit } from '../lib/runtime.js';
 import { LANGUAGE_INFO } from '../lib/format.js';
 import {
-  getRecommendations, recommendationDataStatus, markRankingStale,
+  getRecommendations, recommendationDataStatus, markRankingStale, replaceRecommendation,
 } from '../lib/recengine.js';
 import {
   inWatchlist, addToWatchlist, removeFromWatchlist, markNotInterested,
@@ -78,7 +78,9 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
     else addToWatchlist(m.title);
     afterTasteChange();
   };
-  const onNotInterested = (m) => { markNotInterested(m.title); markRankingStale(); afterTasteChange(); };
+  // Dismissing a card swaps in just the next recommendation rather than
+  // rebuilding the whole carousel, so the other cards stay put.
+  const onNotInterested = (m) => { markNotInterested(m.title); replaceRecommendation(m.title); afterTasteChange(); };
   const onWatched = (m) => onOpenRate?.(m.title);
 
   const shimmer = embeddingsPending;

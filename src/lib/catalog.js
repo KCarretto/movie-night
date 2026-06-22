@@ -10,6 +10,7 @@ import protobuf from 'protobufjs/light';
 import { normTitle, dbKey } from './format.js';
 import { runtime, emit } from './runtime.js';
 import { loadEmbeddings } from './embeddings.js';
+import { cachedFetch } from './datacache.js';
 
 // Base TMDB poster domain. sync.py stores only the relative path suffix in the
 // binary catalogue (e.g. "/lh4v5.jpg"); we re-prefix it here at load time.
@@ -142,7 +143,9 @@ export async function loadMovieDb({ onEmbeddingsReady } = {}) {
   runtime.movieDbStatus = 'loading';
   runtime.movieDbError = '';
   try {
-    const res = await fetch('data/movies.pbf', { cache: 'no-cache' });
+    // Served from a persistent stale-while-revalidate cache so repeat loads
+    // skip re-downloading the ~12 MB catalogue.
+    const res = await cachedFetch('data/movies.pbf');
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const buf = await res.arrayBuffer();
     const Catalog = movieCatalogType();

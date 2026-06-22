@@ -207,6 +207,16 @@
     #bgArt.winner { background-repeat: no-repeat; background-size: cover;
       filter: blur(7px) saturate(1.15) brightness(.5); }
     #bgArt.show { opacity: 1; }
+
+    /* Sync share QR code. qrcode.js renders a fixed-pixel <canvas>/<img>; we
+       scale those children responsively so the code is large and crisp on
+       phones (where this flow is most used) while staying tidy on desktop. */
+    .qr-box :where(canvas, img) { width: 100%; height: auto; display: block; image-rendering: pixelated; }
+    .qr-box { width: 260px; max-width: 78vw; cursor: zoom-in; }
+    @media (min-width: 640px) { .qr-box { width: 200px; cursor: zoom-in; } }
+    /* Enlarged QR shown in the zoom dialog. */
+    .qr-box-zoom :where(canvas, img) { width: 100%; height: auto; display: block; image-rendering: pixelated; }
+    .qr-box-zoom { width: min(86vw, 86vh, 520px); }
   </style>
 </head>
 

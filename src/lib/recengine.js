@@ -415,6 +415,62 @@ export function getRecommendations(options = {}) {
   return recCache;
 }
 
+// Surgically swap a single actioned card (e.g. "Not Interested") out of the
+// current visible batch for the next-best recommendation, leaving every other
+// card untouched. Without this, the changed taste signal (which feeds
+// recSignature) would invalidate the whole cache and reshuffle the carousel.
+//
+// Callers must apply the underlying signal (e.g. markNotInterested) *before*
+// invoking this so the new signature is reflected when we re-stamp the cache.
+export function replaceRecommendation(title) {
+  const norm = normTitle(title);
+  const list = recCache.list || [];
+  const idx = list.findIndex((rec) => rec && normTitle(rec.movie.title) === norm);
+
+  // Ensure we have a ranking to draw the replacement from.
+  let pc = recPrecompute;
+  if (!pc || pc.ranked == null) {
+    pc = ensurePrecompute(recSignature(), null, true);
+  }
+  const ranked = pc.ranked || [];
+  const newList = list.slice();
+
+  if (idx >= 0) {
+    // Titles still on screen must stay put — exclude them (and the actioned
+    // title) so we never surface a duplicate or the just-dismissed movie.
+    const visible = new Set();
+    list.forEach((rec, i) => { if (i !== idx && rec) visible.add(normTitle(rec.movie.title)); });
+    const seen = loadSeenRecommendations();
+    const pick = (allowSeen) => ranked.find((rec) => {
+      const nt = normTitle(rec.movie.title);
+      if (nt === norm || visible.has(nt)) return false;
+      return allowSeen || !seen.has(nt);
+    });
+    // Prefer a never-shown rec; fall back to any unshown-on-screen rec.
+    const replacement = pick(false) || pick(true);
+    if (replacement) {
+      newList[idx] = replacement;
+      seen.add(normTitle(replacement.movie.title));
+      saveSeenRecommendations(seen);
+    } else {
+      // Nothing left to show — just drop the dismissed card.
+      newList.splice(idx, 1);
+    }
+  }
+
+  // Re-rank lazily on the next full refresh so the new signal fully propagates,
+  // but keep the surgically-updated list under the CURRENT signature so the
+  // imminent re-render serves it from cache instead of rebuilding the batch.
+  recRankingStale = true;
+  recCache = {
+    sig: recSignature(),
+    list: newList,
+    personalised: newList.length > 0 && newList[0].personalised,
+    totalAvailable: recCache.totalAvailable || ranked.length,
+  };
+  return recCache;
+}
+
 // Recommendation-data status used by the carousel's small status indicator.
 export function recommendationDataStatus() {
   if (runtime.movieDbStatus === 'error') {

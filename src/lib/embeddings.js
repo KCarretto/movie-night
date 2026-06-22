@@ -7,6 +7,7 @@
 import { EMBED_DIM } from './constants.js';
 import { isVector } from './format.js';
 import { runtime, emit } from './runtime.js';
+import { cachedFetch, isBinaryResponse } from './datacache.js';
 
 // Resolve a movie's static embedding vector as a zero-copy Float32Array view
 // straight out of the shared embeddings buffer, or null if the buffer hasn't
@@ -34,19 +35,22 @@ export async function loadEmbeddings({ onReady } = {}) {
     // binary file. A dev/preview SPA server (and a custom 404 page) answers
     // requests for missing paths with the HTML app shell and a 200 status, so
     // relying on `res.ok` alone would loop forever past the last real part,
-    // appending HTML into the embedding buffer. Gate on the content-type so the
-    // loop stops at the first non-binary (HTML) response, which marks the end.
-    const isBinaryPart = (res) =>
-      res.ok && !(res.headers.get('content-type') || '').toLowerCase().includes('text/html');
+    // appending HTML into the embedding buffer. Gate on the content-type
+    // (isBinaryResponse) so the loop stops at the first non-binary (HTML)
+    // response, which marks the end.
+    //
+    // Each part is served from a persistent stale-while-revalidate cache
+    // (cachedFetch) so repeat loads skip re-downloading the ~200 MB of vectors.
+    const isBinaryPart = isBinaryResponse;
     let partIdx = 0;
     const chunks = [];
-    let res = await fetch(`data/embeddings_part${partIdx}.bin`, { cache: 'no-cache' });
+    let res = await cachedFetch(`data/embeddings_part${partIdx}.bin`);
     if (isBinaryPart(res)) {
       while (isBinaryPart(res)) {
         const chunkBuf = await res.arrayBuffer();
         chunks.push(new Uint8Array(chunkBuf));
         partIdx++;
-        res = await fetch(`data/embeddings_part${partIdx}.bin`, { cache: 'no-cache' });
+        res = await cachedFetch(`data/embeddings_part${partIdx}.bin`);
       }
       const totalLen = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
       const combined = new Uint8Array(totalLen);
@@ -58,7 +62,7 @@ export async function loadEmbeddings({ onReady } = {}) {
       buf = combined.buffer;
     } else {
       // 2. Fall back to the single data/embeddings.bin file.
-      const resSingle = await fetch('data/embeddings.bin', { cache: 'no-cache' });
+      const resSingle = await cachedFetch('data/embeddings.bin');
       if (!resSingle.ok) throw new Error('HTTP ' + resSingle.status);
       buf = await resSingle.arrayBuffer();
     }

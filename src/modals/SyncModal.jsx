@@ -12,7 +12,9 @@ export default function SyncModal({ open, onClose, buildPayload, onImport }) {
   const [view, setView] = useState('picker');
   const [shareUrl, setShareUrl] = useState('');
   const [status, setStatus] = useState('');
+  const [qrZoom, setQrZoom] = useState(false);
   const qrRef = useRef(null);
+  const qrZoomRef = useRef(null);
   const scannerRef = useRef(null);
   const syncCleanupRef = useRef(null);
   // Keep a ref to the latest buildPayload so the share effect never re-fires
@@ -43,6 +45,7 @@ export default function SyncModal({ open, onClose, buildPayload, onImport }) {
       setView('picker');
       setShareUrl('');
       setStatus('');
+      setQrZoom(false);
     }
   }, [open, doCleanup]);
 
@@ -59,22 +62,35 @@ export default function SyncModal({ open, onClose, buildPayload, onImport }) {
     return () => destroySyncPeer();
   }, [open, view]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Render QR code once the share URL is ready.
-  useEffect(() => {
-    if (!shareUrl || !qrRef.current || !window.QRCode) return;
-    qrRef.current.innerHTML = '';
+  // Render a QR code for `shareUrl` into `el` at the given native pixel size.
+  // qrcode.js paints a fixed-size canvas/img; CSS then scales it responsively.
+  const renderQr = useCallback((el, size) => {
+    if (!el || !shareUrl || !window.QRCode) return;
+    el.innerHTML = '';
     try {
       // eslint-disable-next-line no-new
-      new window.QRCode(qrRef.current, {
+      new window.QRCode(el, {
         text: shareUrl,
-        width: 168,
-        height: 168,
+        width: size,
+        height: size,
         correctLevel: window.QRCode.CorrectLevel.M,
       });
     } catch (e) {
-      if (qrRef.current) qrRef.current.textContent = 'QR error';
+      el.textContent = 'QR error';
     }
   }, [shareUrl]);
+
+  // Render QR code once the share URL is ready (high native res so the
+  // responsive CSS scaling stays crisp on large mobile displays).
+  useEffect(() => {
+    renderQr(qrRef.current, 360);
+  }, [shareUrl, renderQr]);
+
+  // Render the enlarged QR when the zoom dialog opens.
+  useEffect(() => {
+    if (!qrZoom) return;
+    renderQr(qrZoomRef.current, 640);
+  }, [qrZoom, renderQr]);
 
   // Receive mode: start Html5Qrcode camera scanner.
   useEffect(() => {
@@ -161,9 +177,18 @@ export default function SyncModal({ open, onClose, buildPayload, onImport }) {
           <p className="text-sm text-slate-400">Scan this QR code from your other device, or copy the link.</p>
           {shareUrl ? (
             <>
-              <div className="bg-white p-2 rounded-xl inline-block">
-                <div ref={qrRef} />
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  className="bg-white p-3 rounded-xl inline-block qr-box"
+                  onClick={() => setQrZoom(true)}
+                  aria-label="Enlarge QR code"
+                  title="Tap to enlarge"
+                >
+                  <div ref={qrRef} />
+                </button>
               </div>
+              <p className="text-xs text-slate-500">Tap the code to enlarge it.</p>
               <input
                 readOnly
                 value={shareUrl}
@@ -209,6 +234,28 @@ export default function SyncModal({ open, onClose, buildPayload, onImport }) {
             <span className="spinner" aria-hidden="true" />
           </div>
           <p className="text-sm text-slate-300">{status || 'Connecting\u2026'}</p>
+        </div>
+      )}
+      {qrZoom && (
+        <div
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4"
+          onClick={() => setQrZoom(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-label="Enlarged QR code"
+        >
+          <div className="flex flex-col items-center gap-4" onClick={(e) => e.stopPropagation()}>
+            <div className="bg-white p-4 rounded-2xl qr-box-zoom">
+              <div ref={qrZoomRef} />
+            </div>
+            <button
+              type="button"
+              className="btn bg-panel2 border border-line text-sm px-5 py-2 rounded-lg text-slate-200"
+              onClick={() => setQrZoom(false)}
+            >
+              Close
+            </button>
+          </div>
         </div>
       )}
 
