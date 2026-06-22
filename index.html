@@ -553,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 16</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 17</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -2169,7 +2169,7 @@
     const bits = [];
     if (r.imdb != null) bits.push(`<span title="IMDb"><i class="fa-brands fa-imdb text-gold"></i> ${escapeHtml(String(r.imdb))}</span>`);
     if (r.rottenTomatoes != null) bits.push(`<span title="Rotten Tomatoes">🍅 ${escapeHtml(String(r.rottenTomatoes))}%</span>`);
-    if (r.letterboxd != null) bits.push(`<span title="Letterboxd (estimated)">📊 ${escapeHtml(String(r.letterboxd))}</span>`);
+    if (r.letterboxd != null) bits.push(`<span title="TMDB">📊 ${escapeHtml(String(r.letterboxd))}</span>`);
     return bits.join(' · ');
   }
 
