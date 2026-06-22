@@ -553,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 16</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 17</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -897,6 +897,7 @@
   let MOVIE_DB = [];
   const movieByTitle = new Map();   // normalized title -> db entry
   const movieByKey = new Map();     // looser dbKey -> db entry (punctuation-insensitive)
+  const movieById = new Map();      // tmdb_id -> db entry
   let movieDbStatus = 'idle';       // idle | loading | ready | error
   let movieDbError = '';
   let embeddingsStatus = 'idle';    // idle | loading | ready | error
@@ -1012,6 +1013,7 @@
   function indexMovieDb() {
     movieByTitle.clear();
     movieByKey.clear();
+    movieById.clear();
     MOVIE_DB.forEach((m) => {
       if (m && m.title) {
         // Pre-compute the description keyword list once at startup so the hot
@@ -1020,6 +1022,7 @@
         movieByTitle.set(normTitle(m.title), m);
         const k = dbKey(m.title);
         if (k && !movieByKey.has(k)) movieByKey.set(k, m);
+        if (m.id) movieById.set(m.id, m);
       }
     });
   }
@@ -1027,7 +1030,8 @@
   // Look up a catalogue entry for a nominated title. Falls back to the looser
   // punctuation-insensitive key so freeform titles still match when they line
   // up with a known movie (case/space/special-character differences aside).
-  function movieMeta(title) {
+  function movieMeta(title, id) {
+    if (id && movieById.has(id)) return movieById.get(id);
     if (!title) return null;
     return movieByTitle.get(normTitle(title)) || movieByKey.get(dbKey(title)) || null;
   }
@@ -1650,9 +1654,16 @@
         if (mine >= MAX_NOMINATIONS) return;          // enforce 2-per-person
         const title = String(action.title || '').trim().slice(0, 80);
         if (!title) return;
-        // Case-insensitive duplicate guard across the whole room.
-        if (state.movies.some((m) => m.title.toLowerCase() === title.toLowerCase())) return;
-        state.movies.push({ id: 'm_' + Math.random().toString(36).slice(2, 9), title, by: fromId });
+        // Duplicate guard (exact same movie or same freeform title) across the whole room.
+        const resolveId = (t, id) => id || (movieMeta(t) || {}).id;
+        const targetId = resolveId(title, action.tmdbId);
+        const isDup = state.movies.some((m) => {
+          const mId = resolveId(m.title, m.tmdbId);
+          if (targetId && mId) return targetId === mId;
+          return m.title.toLowerCase() === title.toLowerCase();
+        });
+        if (isDup) return;
+        state.movies.push({ id: 'm_' + Math.random().toString(36).slice(2, 9), title, tmdbId: action.tmdbId, by: fromId });
         break;
       }
 
@@ -2027,7 +2038,8 @@
 
     // ---- Results: the winner's art becomes the full-page backdrop. ----
     if (state.phase === 'results' && state.results && state.results.winnerTitle) {
-      const meta = movieMeta(state.results.winnerTitle);
+      const winMovie = state.movies.find((m) => m.id === state.results.winnerId);
+      const meta = winMovie ? movieMeta(winMovie.title, winMovie.tmdbId) : movieMeta(state.results.winnerTitle);
       const art = meta && meta.art;
       const sig = 'winner|' + (art || '');
       if (sig === bgArtSig) return;
@@ -2043,7 +2055,7 @@
     const arts = [];
     const seen = new Set();
     state.movies.forEach((m) => {
-      const meta = movieMeta(m.title);
+      const meta = movieMeta(m.title, m.tmdbId);
       if (meta && meta.art && !seen.has(meta.art)) { seen.add(meta.art); arts.push(meta.art); }
     });
     const sig = 'tile|' + arts.join('|');
@@ -2084,7 +2096,7 @@
 
     const canEdit = state.phase === 'lobby';
     state.movies.forEach((m, i) => {
-      const meta = movieMeta(m.title);
+      const meta = movieMeta(m.title, m.tmdbId);
       const li = el('li', 'flex items-center gap-3 bg-panel2 border border-line rounded-lg px-3 py-2');
       const who = (state.peers.find((p) => p.id === m.by) || {}).name || 'Someone';
       const mineMovie = m.by === myId;
@@ -2157,7 +2169,7 @@
     const bits = [];
     if (r.imdb != null) bits.push(`<span title="IMDb"><i class="fa-brands fa-imdb text-gold"></i> ${escapeHtml(String(r.imdb))}</span>`);
     if (r.rottenTomatoes != null) bits.push(`<span title="Rotten Tomatoes">🍅 ${escapeHtml(String(r.rottenTomatoes))}%</span>`);
-    if (r.letterboxd != null) bits.push(`<span title="Letterboxd (estimated)">📊 ${escapeHtml(String(r.letterboxd))}</span>`);
+    if (r.letterboxd != null) bits.push(`<span title="TMDB">📊 ${escapeHtml(String(r.letterboxd))}</span>`);
     return bits.join(' · ');
   }
 
@@ -2271,6 +2283,7 @@
     if (!m) return;
     const input = $('#movieInput');
     input.value = m.title;
+    input.dataset.tmdbId = m.id || '';
     closeSuggestions();
     input.focus();
   }
@@ -2279,6 +2292,7 @@
     const input = $('#movieInput');
     if (!input) return;
     input.addEventListener('input', () => {
+      delete input.dataset.tmdbId;
       taMatches = searchMovies(input.value);
       taActive = -1;
       renderSuggestions();
@@ -3860,7 +3874,7 @@
     ballotOrder.forEach((id, idx) => {
       const movie = state.movies.find((m) => m.id === id);
       if (!movie) return;
-      const meta = movieMeta(movie.title);
+      const meta = movieMeta(movie.title, movie.tmdbId);
       const tags = meta ? genreTagsHtml(meta) : '';
       const desc = meta && meta.description ? meta.description : '';
       const li = el('li', 'rank-row flex items-center gap-2 bg-panel2 border border-line rounded-lg px-3 py-2.5');
@@ -4060,7 +4074,8 @@
       : 'Nobody submitted a ranking.';
 
     // Show the winner's poster art and ratings (mirrors the typeahead card).
-    const winMeta = r.winnerTitle ? movieMeta(r.winnerTitle) : null;
+    const winMovie = state.movies.find((m) => m.id === r.winnerId);
+    const winMeta = winMovie ? movieMeta(winMovie.title, winMovie.tmdbId) : (r.winnerTitle ? movieMeta(r.winnerTitle) : null);
     const winArt = $('#winnerArt');
     const winRatings = $('#winnerRatings');
     if (winArt) {
@@ -4091,7 +4106,7 @@
     const nonVoters = state.peers.filter((p) => !(Array.isArray(state.votes[p.id]) && state.votes[p.id].length));
 
     state.movies.forEach((m) => {
-      const meta = movieMeta(m.title);
+      const meta = movieMeta(m.title, m.tmdbId);
       const langBadge = meta ? languageBadgeHtml(meta) : '';
       const box = el('div', 'bg-panel2 border border-line rounded-lg p-3');
       const chips = voters.map((p) => {
@@ -4898,8 +4913,10 @@
       const input = $('#movieInput');
       const title = input.value.trim();
       if (!title) return;
-      dispatch({ type: 'nominate', title });
+      const tmdbId = input.dataset.tmdbId ? Number(input.dataset.tmdbId) : undefined;
+      dispatch({ type: 'nominate', title, tmdbId });
       input.value = '';
+      delete input.dataset.tmdbId;
     });
 
     // Clicking the logo / "Movie Night" starts a fresh room (home page).
