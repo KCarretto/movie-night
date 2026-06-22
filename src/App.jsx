@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Header from './components/Header.jsx';
 import RoomBar from './components/RoomBar.jsx';
 import Lobby from './components/Lobby.jsx';
@@ -23,13 +23,14 @@ import {
   loadInterested, saveInterested,
   loadNotInterested, saveNotInterested,
   loadNotSure, saveNotSure,
-  saveName,
+  loadSavedName, saveName,
   upsertWatched,
 } from './lib/storage.js';
 import { runtime, emit } from './lib/runtime.js';
 import { markRankingStale } from './lib/recengine.js';
 import { actions, afterTasteChange, boot, shareSeen } from './state/controller.js';
 import { useStore } from './state/useStore.js';
+import { startSyncReceive } from './lib/syncpeer.js';
 
 function uniqByTitle(list = []) {
   const seen = new Set();
@@ -102,7 +103,7 @@ export default function App() {
   const rt = useStore();
   const [showHistory, setShowHistory] = useState(false);
   const [startVoteOpen, setStartVoteOpen] = useState(false);
-  const [syncModal, setSyncModal] = useState({ open: false, syncId: '' });
+  const [syncModalOpen, setSyncModalOpen] = useState(false);
   const [insightsOpen, setInsightsOpen] = useState(false);
   const [trainOpen, setTrainOpen] = useState(false);
   const [recDetail, setRecDetail] = useState(null);
@@ -115,7 +116,20 @@ export default function App() {
 
   useEffect(() => {
     const out = boot();
-    if (out?.syncId) setSyncModal({ open: true, syncId: out.syncId });
+    // If the page was opened via a sync link (?sync=<peerId>), auto-receive
+    // the other device's data and present the import confirm dialog.
+    if (out?.syncId) {
+      startSyncReceive({
+        hostId: out.syncId,
+        onData: (payload) => {
+          if (payload && typeof payload === 'object') {
+            setPendingImport(payload);
+            setImportConfirmOpen(true);
+          }
+        },
+        onError: () => { /* silently ignore — user can retry via settings */ },
+      });
+    }
   }, []);
 
   useEffect(() => {
@@ -252,6 +266,27 @@ export default function App() {
     emit();
   };
 
+  // Stable payload builder for the sync share flow (reads localStorage at call
+  // time so the share effect doesn't need to re-fire when myName changes).
+  const buildSyncPayload = useCallback(() => ({
+    exportedAt: new Date().toISOString(),
+    name: loadSavedName() || rt.myName || '',
+    history: loadHistory(),
+    watched: loadWatched(),
+    watchlist: loadWatchlist(),
+    interested: loadInterested(),
+    notInterested: loadNotInterested(),
+    notSure: loadNotSure(),
+  }), []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Called by SyncModal after a successful camera-based receive.
+  const onSyncImport = useCallback((payload) => {
+    if (payload && typeof payload === 'object') {
+      setPendingImport(payload);
+      setImportConfirmOpen(true);
+    }
+  }, []);
+
   const onSettingsAction = (action) => {
     if (action === 'changeName') {
       const next = window.prompt('Set display name', rt.myName || '');
@@ -264,7 +299,7 @@ export default function App() {
     if (action === 'export') return exportData();
     if (action === 'import') return importRef.current?.click();
     if (action === 'importLetterboxd') return letterboxdRef.current?.click();
-    if (action === 'sync') return setSyncModal({ open: true, syncId: crypto.randomUUID().slice(0, 8) });
+    if (action === 'sync') return setSyncModalOpen(true);
     if (action === 'reset') return resetPrefs();
     if (action === 'deleteAll') return deleteAll();
   };
@@ -336,7 +371,7 @@ export default function App() {
 
       <footer className="max-w-6xl mx-auto px-3 sm:px-4 pb-6 text-center text-xs text-slate-400">
         <div>Serverless P2P over WebRTC · No data leaves your devices except signaling.</div>
-        <div className="mt-1"><b>Version 30</b></div>
+        <div className="mt-1"><b>Version 31</b></div>
       </footer>
 
       <input
@@ -380,7 +415,7 @@ export default function App() {
         }}
       />
 
-      <SyncModal open={syncModal.open} syncId={syncModal.syncId} onClose={() => setSyncModal({ open: false, syncId: '' })} />
+      <SyncModal open={syncModalOpen} onClose={() => setSyncModalOpen(false)} buildPayload={buildSyncPayload} onImport={onSyncImport} />
       <RecDetailModal open={!!recDetail} rec={recDetail} onClose={() => setRecDetail(null)} onRate={openRate} />
       <InsightsModal open={insightsOpen} onClose={() => setInsightsOpen(false)} />
       <TrainModal open={trainOpen} onClose={() => setTrainOpen(false)} onRate={openRate} />
