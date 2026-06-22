@@ -2275,6 +2275,7 @@
     if (!m) return;
     const input = $('#movieInput');
     input.value = m.title;
+    input.dataset.tmdbId = m.id || '';
     closeSuggestions();
     input.focus();
   }
@@ -2283,6 +2284,7 @@
     const input = $('#movieInput');
     if (!input) return;
     input.addEventListener('input', () => {
+      delete input.dataset.tmdbId;
       taMatches = searchMovies(input.value);
       taActive = -1;
       renderSuggestions();
@@ -4902,8 +4904,10 @@
       const input = $('#movieInput');
       const title = input.value.trim();
       if (!title) return;
-      dispatch({ type: 'nominate', title });
+      const tmdbId = input.dataset.tmdbId ? Number(input.dataset.tmdbId) : undefined;
+      dispatch({ type: 'nominate', title, tmdbId });
       input.value = '';
+      delete input.dataset.tmdbId;
     });
 
     // Clicking the logo / "Movie Night" starts a fresh room (home page).
