@@ -553,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 17</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 18</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -1016,9 +1016,6 @@
     movieById.clear();
     MOVIE_DB.forEach((m) => {
       if (m && m.title) {
-        // Pre-compute the description keyword list once at startup so the hot
-        // scoring loop never re-runs the regex tokeniser per candidate.
-        m.keywords = extractKeywords(m.description);
         movieByTitle.set(normTitle(m.title), m);
         const k = dbKey(m.title);
         if (k && !movieByKey.has(k)) movieByKey.set(k, m);
@@ -1181,15 +1178,30 @@
     renderAll();
   }
 
-  // My current taste vector (average embedding of movies I rated > 2.5), or null
-  // if I have no qualifying ratings or embeddings.bin hasn't loaded yet.
+  // My current K-Means taste centroids: a 2D array of normalised preference
+  // vectors ([[384 floats], ...]) computed by buildTasteProfile(). Cached so the
+  // broadcast path never recurses through buildTasteProfile → shareVector.
+  let _myCentroids = null;
+  let _inBuildProfile = false;
+
   function myTasteVector() {
-    try { return buildTasteProfile().userVector || null; }
-    catch (e) { return null; }
+    try {
+      if (_myCentroids == null) buildTasteProfile();
+    } catch (e) { /* embeddings may not be loaded yet */ }
+    return (_myCentroids && _myCentroids.length) ? _myCentroids : [];
   }
-  // Broadcast my taste vector to the room so peers can match the group's vibe.
+  // Broadcast my K-Means centroid set (2D array) to the room so peers can match
+  // the group's vibe. An external call recomputes the freshest centroids first
+  // (buildTasteProfile() broadcasts them through its own guarded shareVector()),
+  // while the re-entrant call from inside buildTasteProfile just dispatches the
+  // freshly-cached centroids — avoiding both recursion and double clustering.
   function shareVector() {
-    dispatch({ type: 'setVector', vector: myTasteVector() });
+    if (_inBuildProfile) {
+      dispatch({ type: 'setVector', vector: (_myCentroids && _myCentroids.length) ? _myCentroids : [] });
+      return;
+    }
+    try { buildTasteProfile(); }
+    catch (e) { dispatch({ type: 'setVector', vector: [] }); }
   }
 
   // ---- Watchlist + training-signal stores -----------------------------------
@@ -1354,7 +1366,7 @@
     votes: {},                   // peerId -> [movieId, movieId, ...] ranked
     results: null,               // computed instant-runoff result (set in results phase)
     seen: {},                    // peerId -> [{ title, rating }] watched-movie shares
-    peerVectors: {},             // peerId -> taste vector (avg embedding of liked movies)
+    peerVectors: {},             // peerId -> 2D array of K-Means taste centroids
   };
 
   // ======================================================================
@@ -1736,14 +1748,18 @@
       }
 
       case 'setVector': {
-        // A peer shares their taste vector (average embedding of their liked
-        // movies) so the room can score candidates against the whole group.
+        // A peer shares their K-Means taste centroids — a nested 2D array of
+        // preference vectors ([[384 floats], ...]) — so the room can score
+        // candidates against every distinct viewing mood present.
         if (!state.peers.some((p) => p.id === fromId)) return;
         if (!state.peerVectors) state.peerVectors = {};
-        const v = action.vector;
-        if (Array.isArray(v) && v.length && v.length <= 2048
-            && v.every((n) => typeof n === 'number' && isFinite(n))) {
-          state.peerVectors[fromId] = v.map((n) => Number(n));
+        let v = action.vector;
+        // Tolerate a legacy flat 1D vector by wrapping it as a single centroid.
+        if (Array.isArray(v) && v.length && typeof v[0] === 'number') v = [v];
+        const isFloatVec = (vec) => Array.isArray(vec) && vec.length > 0 && vec.length <= 2048
+            && vec.every((n) => typeof n === 'number' && isFinite(n));
+        if (Array.isArray(v) && v.length > 0 && v.length <= 16 && v.every(isFloatVec)) {
+          state.peerVectors[fromId] = v.map((vec) => vec.map((n) => Number(n)));
         } else {
           delete state.peerVectors[fromId];
         }
@@ -2321,22 +2337,25 @@
   // Two modes:
   //   Cold-start  — no watched/rated/nominated history → top popular+new movies
   //                 ranked by critic quality alone (fast + always useful).
-  //   Personalised — content-based filtering that builds a multi-signal taste
-  //                 profile from the viewer's history and scores every catalogue
-  //                 entry by cosine-style similarity to that profile.
+  //   Personalised — vector-first filtering that clusters the viewer's history
+  //                 into K-Means preference centroids and scores every catalogue
+  //                 entry by max-pooled cosine similarity to the room's centroids.
   //
   // Signals used when data is available:
-  //   • Genre affinity  — weighted by star rating; penalises disliked genres.
-  //   • Actor affinity  — top cast overlap with liked films (cast[] in DB).
-  //   • Director affinity — favourite directors get a strong boost.
-  //   • Keyword affinity — TF-IDF-style overlap on movie descriptions.
-  //   • Nomination history — past self-nominations treated as mild "liked" signal.
-  //   • Quality score   — critic consensus (IMDb / RT / Letterboxd), always applied.
-  //   • Recency         — recent films guaranteed a share of the carousel.
+  //   • Taste centroids — K-Means clusters of the viewer's liked-film embeddings
+  //                 (up to maxCentroids distinct moods), weighted by rating and
+  //                 decayed by recency. High-dimensional semantic embeddings
+  //                 implicitly capture genre, directorial style and narrative, so
+  //                 no lexical genre/actor/director/keyword heuristics are needed.
+  //   • Group vibe   — peers broadcast their own 2D centroid sets over WebRTC;
+  //                 scoring max-pools across every centroid in the room.
+  //   • Dislike anchors — embeddings of explicitly disliked films damp matches.
+  //   • Quality score — critic consensus (IMDb / RT / Letterboxd), always applied.
+  //   • Recency       — recent films guaranteed a share of the carousel.
   //
   // The scoring is intentionally isolated so each piece is easy to tune:
-  //   REC_CONFIG        — weights/sizes in one place.
-  //   buildTasteProfile() — aggregates all user signals into affinity maps.
+  //   REC_CONFIG        — sizes/strengths in one place.
+  //   buildTasteProfile() — clusters user signals into K-Means centroids.
   //   scoreCandidate()  — pure function; returns a single comparable score.
   //   blendRecommendations() — interleaves "new" films with top personal picks.
 
@@ -2344,19 +2363,6 @@
     maxResults:  18,
     newSinceYear: new Date().getFullYear() - 2,
     newFraction: 0.35,
-    weights: {
-      genre:    1.2,
-      actor:    1.0,
-      director: 1.5,
-      keyword:  0.25,
-      quality:  1.0,
-      groupEmbedding: 2.0,
-      // Hybrid-scoring weights (Part 3): an explicit per-user semantic match
-      // against the viewer's own taste clusters, plus a log-scaled audience
-      // trust factor so well-loved films outrank obscure look-alikes.
-      tasteCentroid:  1.5,
-      popularity:     0.6,
-    },
     // Multi-centroid taste modelling: cluster a user's liked movies into up to
     // this many preference centroids so multi-modal tastes (e.g. horror AND
     // romcom) each surface their own matches instead of averaging to mush. The
@@ -2377,14 +2383,9 @@
     // rating; not-interested marks push the parallel dislike vector.
     watchlistStrength: 2.0,
     notInterestedStrength: 1.5,
-    likedDirectorBoost: 0.5,
     // Roughly how many recommendation slots to reserve for watchlist titles so
     // saved movies resurface periodically in the feed.
     watchlistInjectFraction: 0.15,
-    // Maximum keywords extracted per movie description.
-    maxKeywords: 30,
-    // Minimum word length to keep as a keyword.
-    minWordLen: 4,
   };
 
   const isNewMovie = (m) => !!(m && m.year && m.year >= REC_CONFIG.newSinceYear);
@@ -2402,30 +2403,6 @@
 
   const movieGenres = (m) =>
     (m && m.genres && m.genres.length ? m.genres : (m && m.primaryGenre ? [m.primaryGenre] : []));
-
-  // ---------- keyword extraction ----------
-  // Common English stop-words to strip before building the keyword profile.
-  const STOP_WORDS = new Set([
-    'a','an','and','are','as','at','be','been','but','by','do','for','from',
-    'had','has','have','he','her','him','his','how','if','in','into','is',
-    'it','its','just','me','must','my','no','not','of','on','one','only',
-    'or','our','out','she','so','that','the','their','them','then','there',
-    'they','this','to','up','us','was','we','were','what','when','where',
-    'which','who','will','with','you','your','after','before','about','also',
-    'more','than','when','make','made','find','finds','gets','gets','back',
-    'over','must','life','two','three','four','five','story','world','takes',
-    'take','while','being','becomes','become','young','old','new','first',
-    'last','time','soon','long','away','each','through','around',
-  ]);
-
-  function extractKeywords(text) {
-    if (!text) return [];
-    return text.toLowerCase()
-      .replace(/[^a-z\s]/g, ' ')
-      .split(/\s+/)
-      .filter((w) => w.length >= REC_CONFIG.minWordLen && !STOP_WORDS.has(w))
-      .slice(0, REC_CONFIG.maxKeywords);
-  }
 
   // ---------- quality score ----------
   // Quality signal in roughly 0..1, averaged across whichever ratings exist.
@@ -2487,15 +2464,20 @@
     return dot / (Math.sqrt(magA) * Math.sqrt(magB));
   }
 
-  // ---------- multi-centroid taste clustering ----------
-  // Group a user's liked-movie embeddings into up to `k` preference centroids
-  // with a light cosine-distance k-means (Lloyd's algorithm, few iterations).
-  // A single averaged taste vector collapses multi-modal tastes (e.g. horror +
-  // romcom) into a mid-point that matches neither; separate centroids let each
-  // cluster surface its own matches. Returns an array of normalised centroid
-  // vectors (plain Arrays). Cheap: |samples| is the user's liked history.
+  // ---------- multi-centroid taste clustering (K-Means) ----------
+  // Partition a user's positive-signal embeddings into up to `k` preference
+  // clusters with a light cosine-distance K-Means (Lloyd's algorithm, few
+  // iterations). A single averaged taste vector collapses multi-modal tastes
+  // (e.g. horror + romcom) into a mid-point that matches neither; separate
+  // centroids let each cluster surface its own matches. Each sample carries a
+  // `weight` (its rating / explicit-interest scalar after recency decay) so the
+  // centroid is pulled towards the films the viewer feels most strongly about.
+  // Returns an array of normalised centroid vectors (plain Arrays). Cheap:
+  // |samples| is the user's liked history.
   function clusterCentroids(samples, k, iters) {
-    const pts = samples.filter((s) => isVector(s.emb) && s.emb.length > 0);
+    const pts = samples
+      .filter((s) => isVector(s.emb) && s.emb.length > 0)
+      .map((s) => ({ emb: s.emb, weight: (s.weight > 0 ? s.weight : 1) }));
     if (!pts.length) return [];
     const dim = pts[0].emb.length;
     const norm = (v) => {
@@ -2528,17 +2510,18 @@
         }
         if (assign[p] !== best) { assign[p] = best; moved = true; }
       }
-      // Update step: mean of each cluster's members, re-normalised.
+      // Update step: weighted mean of each cluster's members, re-normalised so
+      // higher-rated films dominate the centroid coordinates.
       const sums = Array.from({ length: k }, () => new Array(dim).fill(0));
-      const counts = new Array(k).fill(0);
+      const totalW = new Array(k).fill(0);
       for (let p = 0; p < pts.length; p++) {
-        const c = assign[p], emb = pts[p].emb;
-        counts[c] += 1;
-        for (let i = 0; i < dim; i++) sums[c][i] += emb[i];
+        const c = assign[p], emb = pts[p].emb, wt = pts[p].weight;
+        totalW[c] += wt;
+        for (let i = 0; i < dim; i++) sums[c][i] += emb[i] * wt;
       }
       for (let c = 0; c < k; c++) {
-        if (!counts[c]) continue;          // keep the old centroid if empty
-        for (let i = 0; i < dim; i++) sums[c][i] /= counts[c];
+        if (!totalW[c]) continue;          // keep the old centroid if empty
+        for (let i = 0; i < dim; i++) sums[c][i] /= totalW[c];
         centroids[c] = norm(sums[c]);
       }
       if (!moved && it > 0) break;          // converged
@@ -2548,152 +2531,69 @@
     return centroids.filter((_, c) => live.has(c));
   }
 
-  // ---------- group-taste vibe ----------
-  // Cosine similarity used for group matching. When embeddings.bin hasn't
-  // finished loading yet (or either vector is missing) we gracefully default to
-  // a neutral 0.5 so recommendations still rank sensibly in the meantime.
-  function vibeSimilarity(a, b) {
-    if (!window.EMBEDDINGS_BUFFER) return 0.5;
-    if (!isVector(a) || !isVector(b) || a.length !== b.length) {
-      return 0.5;
-    }
-    return cosineSimilarity(a, b);
-  }
 
-  // Average cosine similarity of a candidate's embedding against the whole room:
-  // the local user's taste vector plus every peer vector shared over WebRTC.
-  // Result is mapped from cosine [-1, 1] onto a clean [0, 1] scale.
-  function groupVibeScore(m, profile) {
-    const emb = movieEmbedding(m);
-    const sims = [];
-    if (isVector(profile.userVector)) sims.push(vibeSimilarity(profile.userVector, emb));
-    const peerVectors = (state && state.peerVectors) || {};
-    Object.keys(peerVectors).forEach((pid) => {
-      if (pid === myId) return;                 // local taste is counted above
-      const v = peerVectors[pid];
-      if (isVector(v)) sims.push(vibeSimilarity(v, emb));
-    });
-    // Nobody has a usable taste vector yet → neutral.
-    const groupCosineScore = sims.length
-      ? sims.reduce((s, x) => s + x, 0) / sims.length
-      : 0.5;
-    return (groupCosineScore + 1) / 2;          // [-1, 1] → [0, 1]
-  }
-  // Build a multi-signal profile from watched+rated movies and past nominations.
-  // Each signal is a Map<feature, weight> where positive = liked, negative = disliked.
-  // Returns { genreWeights, actorWeights, directorWeights, keywordWeights,
-  //           userVector, dislikeVector, positiveSamples,
-  //           watchedCount, ratedCount, hasSignal }
+  // Build a vector-first taste profile from the viewer's history. Positive
+  // signals (rating > 2.5, watchlist, explicit interest) become weighted
+  // embedding samples that K-Means partitions into up to maxCentroids distinct
+  // preference clusters; negative signals (rating < 2.5, not-interested) are
+  // collected as raw dislike anchor vectors. High-dimensional semantic
+  // embeddings implicitly capture genre, directorial style and narrative — so
+  // no lexical genre/actor/director/keyword heuristics are needed any more.
+  // Returns { centroids, dislikeAnchors, positiveSamples, likedGenres,
+  //           hasSignal, watchedCount, ratedCount }.
   function buildTasteProfile() {
-    const genreWeights    = new Map();
-    const actorWeights    = new Map();
-    const directorWeights = new Map();
-    const keywordWeights  = new Map();
+    // Weighted positive embedding samples fed to K-Means: { title, emb, weight }.
+    // `weight` = the rating / explicit-interest scalar after recency decay.
+    const positiveSamples = [];
+    // Raw embedding vectors of explicitly disliked films (one per movie).
+    const dislikeAnchors  = [];
+    // Lightweight liked-genre tally — used only to label the "Genre Match" badge,
+    // never for runtime scoring (that is purely vector-based now).
+    const likedGenres     = new Map();
 
-    function applySignals(meta, strength) {
-      // Genres
-      movieGenres(meta).forEach((g) =>
-        genreWeights.set(g, (genreWeights.get(g) || 0) + strength));
-      // Actors (cast[] — present in DB entries fetched with credits)
-      if (Array.isArray(meta.cast)) {
-        meta.cast.forEach((a) =>
-          actorWeights.set(a, (actorWeights.get(a) || 0) + strength));
-      }
-      // Director
-      const dirs = Array.isArray(meta.director) ? meta.director
-                 : (meta.director ? [meta.director] : []);
-      dirs.forEach((d) =>
-        directorWeights.set(d, (directorWeights.get(d) || 0) + strength * 1.2));
-      // Description keywords (pre-tokenised once at startup; fall back lazily)
-      (meta.keywords || extractKeywords(meta.description)).forEach((kw) =>
-        keywordWeights.set(kw, (keywordWeights.get(kw) || 0) + strength * 0.5));
+    // Record a positive signal: scale its embedding contribution by `scalar`
+    // (rating distance / interest level) and an exponential recency decay with a
+    // 90-day taste half-life, so fresh, strong opinions dominate the clusters.
+    function addPositive(meta, scalar, ageDays) {
+      if (!(scalar > 0)) return;
+      const recencyDecay = Math.exp(-(ageDays > 0 ? ageDays : 0) / 90);
+      const weight = scalar * recencyDecay;
+      if (!(weight > 0)) return;
+      const emb = movieEmbedding(meta);
+      if (!isVector(emb) || emb.length === 0) return;
+      positiveSamples.push({ title: meta.title, emb, weight });
+      movieGenres(meta).forEach((g) => likedGenres.set(g, (likedGenres.get(g) || 0) + weight));
     }
-
-    // Weighted taste-vector accumulators. Positive (liked) movies feed the
-    // userVector; disliked movies feed a parallel dislikeVector whose alignment
-    // is later subtracted from candidate scores. Each contribution is scaled by
-    // how far the rating sits from neutral (2.5) and by an exponential recency
-    // decay (90-day preference half-life), so fresh, strong opinions dominate.
-    let userVector = null, userWeight = 0;
-    let dislikeVector = null, dislikeWeight = 0;
-    const positiveSamples = [];   // { title, emb } for "because you liked X"
-
-    function accumulate(target, emb, weight) {
-      if (!target) {
-        const out = new Array(emb.length);
-        for (let i = 0; i < emb.length; i++) out[i] = emb[i] * weight;
-        return out;
-      }
-      if (target.length !== emb.length) return target;
-      for (let i = 0; i < target.length; i++) target[i] += emb[i] * weight;
-      return target;
+    // Record a negative signal as a standalone dislike anchor vector.
+    function addDislike(meta) {
+      const emb = movieEmbedding(meta);
+      if (!isVector(emb) || emb.length === 0) return;
+      dislikeAnchors.push(Array.from(emb));
     }
 
     const watched = loadWatched();
     let rated = 0;
-    const likedDirectors = new Set();
     watched.forEach((wEntry) => {
       const meta = movieMeta(wEntry.title);
       if (!meta) return;
       const r = wEntry.rating || 0;
-      if (r > 3.5) {
-        const dirs = Array.isArray(meta.director) ? meta.director
-                   : (meta.director ? [meta.director] : []);
-        dirs.forEach((d) => likedDirectors.add(d));
-      }
-      // Rated: signal proportional to how far from neutral (2.5).
-      // Unrated (watched but not scored): mild positive.
-      const variance = r ? (r - 2.5) : 0.5;
       if (r) rated += 1;
-      applySignals(meta, variance);
-
-      // Recency decay: exp(-ageDays / 90) → recent ratings weigh ~e× more than
-      // ones from a quarter ago.
-      const dynamicAgeDays = (Date.now() - (wEntry.watchedAt || Date.now())) / (1000 * 60 * 60 * 24);
-      const recencyDecay = Math.exp(-dynamicAgeDays / 90);
-
-      const emb = movieEmbedding(meta);
-      if (!isVector(emb) || emb.length === 0) return;
-      if (variance > 0) {
-        const weight = variance * recencyDecay;
-        userVector = accumulate(userVector, emb, weight);
-        userWeight += weight;
-        positiveSamples.push({ title: meta.title, emb });
-      } else if (variance < 0) {
-        const weight = Math.abs(variance) * recencyDecay;
-        dislikeVector = accumulate(dislikeVector, emb, weight);
-        dislikeWeight += weight;
-      }
-    });
-
-    // Past nomination history: movies the viewer chose to nominate are a mild
-    // "interested in" signal even without an explicit rating.
-    loadHistory().forEach((night) => {
-      if (!Array.isArray(night.movies)) return;
-      night.movies.forEach((entry) => {
-        // Treat all stored nominations as self-nominated (history is per-browser).
-        const meta = movieMeta(entry.title);
-        if (!meta) return;
-        // Slight positive signal, weaker than an explicit rating.
-        applySignals(meta, 0.3);
-      });
+      const ageDays = (Date.now() - (wEntry.watchedAt || Date.now())) / (1000 * 60 * 60 * 24);
+      // Rated above neutral (2.5) → positive cluster sample; below → dislike
+      // anchor; watched-but-unrated → mild positive.
+      if (r > 2.5) addPositive(meta, r - 2.5, ageDays);
+      else if (r > 0 && r < 2.5) addDislike(meta);
+      else if (r === 0) addPositive(meta, 0.5, ageDays);
     });
 
     // ---- Training-flow + watchlist signals --------------------------------
-    // The watchlist is a strong, explicit "I want to see this" signal, so it is
-    // weighted heavily — comparable to a high star rating — and feeds the taste
-    // vector directly. Interested ratings scale with the chosen level, and
-    // not-interested marks push the dislike vector.
+    // The watchlist is a strong, explicit "I want to see this", so it is
+    // weighted as heavily as a top rating. Interested ratings scale with the
+    // chosen level; not-interested marks become dislike anchors.
     const watchlist = loadWatchlist();
     watchlist.forEach((entry) => {
       const meta = movieMeta(entry.title);
-      if (!meta) return;
-      applySignals(meta, REC_CONFIG.watchlistStrength);
-      const emb = movieEmbedding(meta);
-      if (!isVector(emb) || emb.length === 0) return;
-      userVector = accumulate(userVector, emb, REC_CONFIG.watchlistStrength);
-      userWeight += REC_CONFIG.watchlistStrength;
-      positiveSamples.push({ title: meta.title, emb });
+      if (meta) addPositive(meta, REC_CONFIG.watchlistStrength, 0);
     });
 
     const interested = loadInterested();
@@ -2703,142 +2603,105 @@
       // Interest 1..5 → strength ~0.4..2.0 (0 / unrated → mild positive 0.6).
       const lvl = entry.interest || 0;
       const strength = lvl ? (lvl / 5) * 2 : 0.6;
-      applySignals(meta, strength);
-      const emb = movieEmbedding(meta);
-      if (!isVector(emb) || emb.length === 0) return;
-      userVector = accumulate(userVector, emb, strength);
-      userWeight += strength;
-      positiveSamples.push({ title: meta.title, emb });
+      addPositive(meta, strength, 0);
     });
 
     const notInterested = loadNotInterested();
     notInterested.forEach((entry) => {
       const meta = movieMeta(entry.title);
-      if (!meta) return;
-      applySignals(meta, -REC_CONFIG.notInterestedStrength);
-      const emb = movieEmbedding(meta);
-      if (!isVector(emb) || emb.length === 0) return;
-      dislikeVector = accumulate(dislikeVector, emb, REC_CONFIG.notInterestedStrength);
-      dislikeWeight += REC_CONFIG.notInterestedStrength;
+      if (meta) addDislike(meta);
     });
 
     const trainingSignals = watchlist.length + interested.length + notInterested.length;
     const hasSignal = rated + watched.length + loadHistory().length + trainingSignals
                       >= REC_CONFIG.personaliseThreshold;
 
-    // Normalise the cumulative affinity maps into an *average* scale so that
-    // users with lots of history don't produce runaway, unbounded weights.
-    const totalSignals = watched.length + rated + loadHistory().length + trainingSignals;
-    if (totalSignals > 0) {
-      [genreWeights, actorWeights, directorWeights, keywordWeights].forEach((map) => {
-        map.forEach((value, key) => map.set(key, value / totalSignals));
-      });
-    }
-
-    // Convert the weighted sums into weighted *averages* so the taste vectors
-    // stay on the same scale as individual embeddings (cosine is scale-free, but
-    // this keeps the vectors stable as more history accumulates).
-    if (userVector && userWeight > 0) {
-      for (let i = 0; i < userVector.length; i++) userVector[i] /= userWeight;
-    }
-    if (dislikeVector && dislikeWeight > 0) {
-      for (let i = 0; i < dislikeVector.length; i++) dislikeVector[i] /= dislikeWeight;
-    }
-
-    // Cluster the liked-movie embeddings into up to maxCentroids preference
-    // centroids so multi-modal tastes are modelled separately (Part 2). The
-    // dislikeVector doubles as the single negative centroid.
-    const positiveCentroids = clusterCentroids(
+    // Partition the weighted positive samples into up to maxCentroids K-Means
+    // preference clusters so multi-modal tastes are modelled separately.
+    const centroids = clusterCentroids(
       positiveSamples, REC_CONFIG.maxCentroids, REC_CONFIG.centroidIters);
 
-    return { genreWeights, actorWeights, directorWeights, keywordWeights,
-             userVector, dislikeVector, positiveSamples, positiveCentroids,
-             watchedCount: watched.length, ratedCount: rated, hasSignal,
-             likedDirectors };
+    // Cache and broadcast our centroid set (2D array) so peers can max-pool
+    // against every distinct mood we bring to the room. The flag makes the
+    // re-entrant shareVector() just dispatch the cache instead of re-clustering.
+    _myCentroids = centroids;
+    _inBuildProfile = true;
+    try { shareVector(); }
+    finally { _inBuildProfile = false; }
+
+    return { centroids, dislikeAnchors, positiveSamples, likedGenres,
+             watchedCount: watched.length, ratedCount: rated, hasSignal };
   }
 
   // ---------- candidate scoring ----------
-  // Given a catalogue entry and a taste profile, return the score.
-  // Year-agnostic — recency is handled by the blend step so vintage classics that
-  // perfectly match the viewer's taste are never unfairly buried.
+  // Vector-first scoring: max-pool the candidate's cosine similarity across every
+  // positive centroid in the room (the viewer's own K-Means centroids plus all
+  // peer centroid sets synced over WebRTC), so a film ranks on its single best
+  // match — it only needs to fit ONE distinct viewing mood. The score is damped
+  // by alignment with the viewer's dislike anchors and multiplied by the film's
+  // intrinsic critic quality. Year-agnostic — recency is handled by the blend
+  // step so vintage classics that perfectly match are never unfairly buried.
   function scoreCandidate(m, profile) {
-    const w   = REC_CONFIG.weights;
     // Discard obscure candidates (too few votes / too low popularity) so the
     // feed surfaces films people have actually heard of.
     if (isObscureMovie(m)) return -Infinity;
-    // Metadata features are dampened by the *square root* of each feature list's
-    // length (rather than its raw length) so that movies with long genre/cast
-    // lists don't dilute explicit user-affinity signals down to noise.
-    const genres = movieGenres(m);
-    const gen = genres.reduce((s, g) => s + (profile.genreWeights.get(g) || 0), 0) / Math.sqrt(genres.length || 1);
-    const cast = Array.isArray(m.cast) ? m.cast : [];
-    const act = cast.reduce((s, a) => s + (profile.actorWeights.get(a) || 0), 0) / Math.sqrt(cast.length || 1);
-    const dirs = Array.isArray(m.director) ? m.director
-               : (m.director ? [m.director] : []);
-    const dir  = dirs.reduce((s, d) => s + (profile.directorWeights.get(d) || 0), 0) / Math.sqrt(dirs.length || 1);
-    // Keyword affinity reuses the keyword list pre-computed at startup, so the
-    // hot scoring loop never re-runs the regex tokeniser per candidate.
-    const kws  = m.keywords || [];
-    const kw   = kws.reduce((s, k) => s + (profile.keywordWeights.get(k) || 0), 0) / (kws.length || 1);
-    const qual = qualityScore(m);
-    // Audience-trust factor: log-scaled vote count normalised to [0, 1] so
-    // well-loved films outrank obscure titles that merely match the text.
-    const pTrust = popularityTrust(m);
-
-    // Group-taste collaborative filter: how well this candidate fits the whole
-    // room's combined vibe (local user + every peer taste vector), in [0, 1].
-    const groupCosineScore = groupVibeScore(m, profile);
-
-    let score = w.genre * gen + w.actor * act + w.director * dir + w.keyword * kw
-              + w.quality * qual + w.groupEmbedding * groupCosineScore
-              + w.popularity * pTrust;
-
-    if (profile.likedDirectors && profile.likedDirectors.size > 0) {
-      const hasLikedDir = dirs.some((d) => profile.likedDirectors.has(d));
-      if (hasLikedDir) {
-        score += REC_CONFIG.likedDirectorBoost;
-      }
-    }
-
-    // Multi-centroid semantic match + negative feedback (Part 2):
-    //   Score_base = max_k cos(emb, C_pos_k) - alpha * cos(emb, C_neg)
-    // Take the single best-matching positive cluster so a film only needs to fit
-    // ONE facet of the viewer's taste, then subtract a fraction of the dislike
-    // alignment so look-alikes of disliked films are pushed down.
+    // Zero-copy Float32Array view straight out of the shared embeddings buffer.
     const emb = movieEmbedding(m);
-    if (emb) {
-      if (profile.positiveCentroids && profile.positiveCentroids.length) {
-        let best = -Infinity;
-        for (const c of profile.positiveCentroids) {
-          const sim = cosineSimilarity(emb, c);
-          if (sim > best) best = sim;
-        }
-        if (best > -Infinity) score += w.tasteCentroid * Math.max(0, best);
-      }
-      if (isVector(profile.dislikeVector)) {
-        const dislikeAlign = Math.max(0, cosineSimilarity(emb, profile.dislikeVector));
-        score -= REC_CONFIG.dislikeAlpha * w.tasteCentroid * dislikeAlign;
+    // No embedding yet → fall back to intrinsic critic quality alone.
+    if (!isVector(emb)) return qualityScore(m);
+
+    // Max-pooling over the room's positive centroids: local + every peer set.
+    let best = -Infinity;
+    if (profile.centroids) {
+      for (const c of profile.centroids) {
+        const s = cosineSimilarity(emb, c);
+        if (s > best) best = s;
       }
     }
+    const peerVectors = (state && state.peerVectors) || {};
+    Object.keys(peerVectors).forEach((pid) => {
+      if (pid === myId) return;                 // local centroids counted above
+      const list = peerVectors[pid];
+      if (!Array.isArray(list)) return;
+      for (const v of list) {
+        if (!isVector(v)) continue;
+        const s = cosineSimilarity(emb, v);
+        if (s > best) best = s;
+      }
+    });
+    // No usable taste vector anywhere yet → rank purely on quality.
+    if (best === -Infinity) return qualityScore(m);
 
-    return score;
+    let sim = Math.max(0, best);
+
+    // Scale down if the candidate aligns closely with any dislike anchor.
+    if (profile.dislikeAnchors && profile.dislikeAnchors.length) {
+      let dis = 0;
+      for (const d of profile.dislikeAnchors) {
+        const s = cosineSimilarity(emb, d);
+        if (s > dis) dis = s;
+      }
+      sim = Math.max(0, sim - REC_CONFIG.dislikeAlpha * dis);
+    }
+
+    // Multiply the max-pooled similarity by the film's intrinsic critic quality.
+    return sim * qualityScore(m);
   }
 
-  // Identify the dominant scoring factor for an explainable badge. Find the
-  // single past favourite whose embedding best matches this candidate.
-  // Calculated on-demand for final selected recommendation batches.
+  // Identify the dominant scoring factor for a hyper-concise justification badge.
+  // Compares the three vector-first signals — peer-centroid group vibe, the best
+  // match to the viewer's own positive history, and liked-genre overlap — and
+  // returns the matching `why` tag. A personal-history win returns the literal
+  // matched movie title; everything else returns a short constant label.
   function computeRecommendationWhy(m, profile) {
-    const w   = REC_CONFIG.weights;
     // Whether more than one person is in the room. Solo sessions must never
     // claim a recommendation "matches the group vibe".
     const isGroupSession = !!(state && state.peers && state.peers.length > 1);
-    const genres = movieGenres(m);
-    const gen = genres.reduce((s, g) => s + (profile.genreWeights.get(g) || 0), 0) / Math.sqrt(genres.length || 1);
-    const groupCosineScore = groupVibeScore(m, profile);
     const emb = movieEmbedding(m);
 
+    // Best match to the viewer's own positive history (gives a title to show).
     let bestFav = null;
-    if (emb && profile.positiveSamples && profile.positiveSamples.length) {
+    if (isVector(emb) && profile.positiveSamples && profile.positiveSamples.length) {
       for (const sample of profile.positiveSamples) {
         const sim = cosineSimilarity(emb, sample.emb);
         if (!bestFav || sim > bestFav.sim) bestFav = { title: sample.title, sim };
@@ -2846,19 +2709,51 @@
     }
     // Justification floor: a "because you watched X" claim is only honest when
     // the embeddings are genuinely close. Below this similarity, drop it.
-    if (bestFav && bestFav.sim < 0.38) { bestFav = null; }
+    if (bestFav && bestFav.sim < 0.38) bestFav = null;
+
+    // Best match to a peer's centroid (the group vibe), excluding our own set.
+    let peerBest = -Infinity;
+    if (isVector(emb) && isGroupSession) {
+      const pv = (state && state.peerVectors) || {};
+      Object.keys(pv).forEach((pid) => {
+        if (pid === myId) return;
+        const list = pv[pid];
+        if (!Array.isArray(list)) return;
+        for (const v of list) {
+          if (!isVector(v)) continue;
+          const s = cosineSimilarity(emb, v);
+          if (s > peerBest) peerBest = s;
+        }
+      });
+    }
+
+    // Liked-genre overlap, normalised to roughly [0, 1] then dampened so it only
+    // wins the badge when the semantic (vector) signals are weak — embeddings
+    // already capture genre, so this is a fallback explanation, not a headline.
+    let genreVal = 0;
+    const lg = profile.likedGenres;
+    if (lg && lg.size) {
+      let maxg = 0;
+      lg.forEach((v) => { if (v > maxg) maxg = v; });
+      const cg = movieGenres(m);
+      if (maxg > 0 && cg.length) {
+        let sum = 0;
+        cg.forEach((g) => { sum += (lg.get(g) || 0); });
+        genreVal = 0.5 * (sum / (cg.length * maxg));
+      }
+    }
+
     const drivers = [
-      { key: 'group', val: isGroupSession ? (w.groupEmbedding * groupCosineScore) : -Infinity },
-      { key: 'fav',   val: !isGroupSession ? (w.groupEmbedding * groupCosineScore) : -Infinity },
-      { key: 'genre', val: w.genre * Math.max(0, gen) },
+      { key: 'group', val: peerBest > -Infinity ? peerBest : -Infinity },
+      { key: 'fav',   val: bestFav ? bestFav.sim : -Infinity },
+      { key: 'genre', val: genreVal > 0 ? genreVal : -Infinity },
     ];
     drivers.sort((a, b) => b.val - a.val);
-    if (drivers[0].key === 'fav') {
-      if (bestFav) return '🍿 ' + bestFav.title;
-      return '✨ Fits your taste profile';
-    }
-    if (drivers[0].key === 'genre' && gen > 0) return `✨ Top pick for ${m.primaryGenre || 'Movie'} fans`;
-    return isGroupSession ? '👥 Matches group vibe' : '✨ Fits your taste profile';
+    const top = drivers[0];
+    if (top.val === -Infinity) return isGroupSession ? 'Group Vibe' : 'Genre Match';
+    if (top.key === 'group') return 'Group Vibe';
+    if (top.key === 'fav') return bestFav.title;
+    return 'Genre Match';
   }
 
   // Cold-start score: quality + small recency boost; no personalisation.
@@ -2936,6 +2831,9 @@
     // are suppressed from the feed entirely.
     const skipSet      = new Set(loadNotInterested().map((x) => normTitle(x.title)));
     const watchlistSet = new Set(loadWatchlist().map((x) => normTitle(x.title)));
+    // Titles the user rated in the taste-training flow ("interested") get a
+    // concise "Training" provenance badge when they surface in the feed.
+    const trainingSet  = new Set(loadInterested().map((x) => normTitle(x.title)));
     const candidates   = [];
     for (const m of MOVIE_DB) {
       if (!m || !m.title || !m.art) continue;
@@ -2957,7 +2855,8 @@
         score = coldStartScore(m);
       }
       const onWatchlist = watchlistSet.has(nt);
-      if (onWatchlist) why = '📌 On your watchlist';
+      if (onWatchlist) why = 'Watchlist';
+      else if (trainingSet.has(nt)) why = 'Training';
       candidates.push({ movie: m, score, why, isNew: isNewMovie(m), personalised, fromWatchlist: onWatchlist });
     }
     candidates.sort((a, b) => b.score - a.score);
@@ -3108,11 +3007,9 @@
     const seen = seenIndicatorHtml(m.title);
     const safeTitle = escapeHtml(m.title);
     const onList = inWatchlist(m.title);
+    // Hyper-concise justification badge rendered directly next to the title.
     const why = rec.why
-      ? `<span class="rec-why-wrap">
-           <span class="rec-why" tabindex="0" aria-label="Why this was recommended">${escapeHtml(rec.why)}</span>
-           <span class="rec-why-pop card">${escapeHtml(rec.why)}</span>
-         </span>`
+      ? `<span class="text-[10px] bg-panel2 text-accent2 px-1.5 py-0.5 rounded border border-line font-semibold mt-0.5 inline-block self-start max-w-full truncate" aria-label="Why this was recommended">${escapeHtml(rec.why)}</span>`
       : '';
     return `
       <div class="rec-card" role="listitem" data-title="${safeTitle}" tabindex="0" aria-label="View details for ${safeTitle}">
@@ -3122,10 +3019,10 @@
         </div>
         <div class="p-2 flex flex-col gap-1 flex-1">
           <div class="rec-title text-xs font-medium leading-snug">${safeTitle}${m.year ? ` <span class="text-slate-500">(${escapeHtml(String(m.year))})</span>` : ''}</div>
+          ${why}
           <div class="mt-auto space-y-1">
             ${seen || lang ? `<div class="flex items-center gap-1 flex-wrap text-[11px]">${seen}${lang}</div>` : ''}
             ${ratings ? `<div class="text-[10px] text-slate-400 truncate">${ratings}</div>` : ''}
-            ${why}
             <button class="rec-nominate btn w-full text-xs font-semibold py-1.5 rounded-lg ${canNominate ? 'btn-primary text-white' : 'opacity-40 cursor-not-allowed'}"
                     data-title="${safeTitle}" ${canNominate ? '' : 'disabled'}>
               <i class="fa-solid fa-plus mr-1"></i>Nominate
