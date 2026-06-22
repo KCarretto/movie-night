@@ -50,7 +50,10 @@ Backends
 * **OpenAI** — pass ``--backend openai`` (or set ``EMBED_BACKEND=openai``) to use
   OpenAI's ``text-embedding-3-small``. Requires ``OPENAI_API_KEY``.
 * **Gemini** — pass ``--backend gemini`` (or set ``EMBED_BACKEND=gemini``) to use
-  Google's ``gemini-embedding-2``. Requires ``GEMINI_API_KEY`` or ``GOOGLE_API_KEY``.
+  Google's ``gemini-embedding-2`` via the asynchronous **Batch API**
+  (``client.batches.create_embeddings``), which generates one embedding per
+  movie at higher throughput and lower cost. Requires ``GEMINI_API_KEY`` or
+  ``GOOGLE_API_KEY``.
 
 Usage
 -----
@@ -74,9 +77,76 @@ import argparse
 import os
 import struct
 import sys
+import time
 from typing import Any, Dict, List, Optional, Sequence
 
 import catalog_io
+
+
+# ---------------------------------------------------------------------------
+# Progress reporting
+# ---------------------------------------------------------------------------
+class Progress:
+    """Tiny spinner / progress indicator so long embedding runs show they're alive.
+
+    Mirrors the indicator used by ``sync.py``: on a TTY it animates a single
+    in-place line (spinner + count + percentage); when the stream is redirected
+    (e.g. CI logs) it prints occasional standalone lines instead, so logs stay
+    readable without thousands of carriage returns.
+
+    ``advance`` bumps the completed count (e.g. after a batch of movies is
+    embedded); ``tick`` just re-renders to show liveness while waiting on a
+    long-running async batch job, without changing the count.
+    """
+
+    FRAMES = "|/-\\"
+
+    def __init__(self, label: str, total: Optional[int] = None, stream=sys.stderr):
+        self.label = label
+        self.total = total if (total is None or total > 0) else None
+        self.stream = stream
+        self.count = 0
+        self._frame = 0
+        self._last_suffix: Optional[str] = None
+        self._tty = bool(getattr(stream, "isatty", lambda: False)())
+
+    def advance(self, n: int = 1, suffix: str = "") -> None:
+        self.count += n
+        self._frame += 1
+        self._render(suffix, force=True)
+
+    def tick(self, suffix: str = "") -> None:
+        self._frame += 1
+        self._render(suffix)
+
+    def _line(self, suffix: str) -> str:
+        spin = self.FRAMES[self._frame % len(self.FRAMES)]
+        if self.total:
+            pct = (self.count / self.total) * 100
+            line = f"{spin} {self.label}: {self.count}/{self.total} ({pct:5.1f}%)"
+        else:
+            line = f"{spin} {self.label}: {self.count}"
+        return f"{line} {suffix}".rstrip()
+
+    def _render(self, suffix: str, force: bool = False) -> None:
+        line = self._line(suffix)
+        if self._tty:
+            self.stream.write("\r\033[K" + line)
+            self.stream.flush()
+        elif force or suffix != self._last_suffix:
+            # In CI logs, only emit a standalone line when something meaningful
+            # changed (a count advance or a new status) to avoid spamming.
+            self.stream.write(line + "\n")
+            self.stream.flush()
+        self._last_suffix = suffix
+
+    def done(self, suffix: str = "") -> None:
+        line = self._line(suffix)
+        if self._tty:
+            self.stream.write("\r\033[K" + line + "\n")
+        else:
+            self.stream.write(line + "\n")
+        self.stream.flush()
 
 # Default models per backend.
 LOCAL_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
@@ -211,17 +281,33 @@ class OpenAIBackend:
 
 
 class GeminiBackend:
-    """Google Gemini embedding backend. Requires GEMINI_API_KEY or GOOGLE_API_KEY."""
+    """Google Gemini embedding backend. Requires GEMINI_API_KEY or GOOGLE_API_KEY.
 
-    # Gemini's embedding endpoint rejects requests whose batch is too large
-    # (the API caps the number of texts *and* the total token count per
-    # ``embed_content`` call). The script-level ``--batch-size`` controls how
-    # many movies are read/cached per loop, but it can be far larger than what a
-    # single API request accepts, so we sub-batch every call down to a safe size
-    # here regardless of the caller's batch size.
-    MAX_REQUEST_BATCH = 100
+    Uses the asynchronous **Batch API** (``client.batches.create_embeddings``)
+    rather than the synchronous ``embed_content`` endpoint. Every movie's text is
+    submitted as one inlined request, the job is polled until it reaches a
+    terminal state, and exactly one embedding vector per movie is returned in the
+    original request order. See
+    https://ai.google.dev/gemini-api/docs/batch-api#batch-embedding.
+    """
 
-    def __init__(self, model_name: str = "gemini-embedding-2") -> None:
+    # How long to wait between polls of the batch job state.
+    POLL_INTERVAL_SECONDS = 15
+
+    # Batch job states that mean the job is finished (no further polling).
+    _TERMINAL_STATES = {
+        "JOB_STATE_SUCCEEDED",
+        "JOB_STATE_FAILED",
+        "JOB_STATE_CANCELLED",
+        "JOB_STATE_EXPIRED",
+        "JOB_STATE_PARTIALLY_SUCCEEDED",
+    }
+
+    def __init__(
+        self,
+        model_name: str = "gemini-embedding-2",
+        progress: Optional["Progress"] = None,
+    ) -> None:
         from google import genai
 
         api_key = os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")
@@ -231,56 +317,81 @@ class GeminiBackend:
             )
         self._client = genai.Client(api_key=api_key.strip())
         self._model = model_name
+        self._progress = progress
 
-    def _embed_request(self, texts: Sequence[str], dim: int) -> List[List[float]]:
-        """Embed a single, already-sized batch and return one vector per input."""
-        resp = self._client.models.embed_content(
-            model=self._model,
-            contents=list(texts),
-            config={"output_dimensionality": dim},
-        )
-        embeddings = resp.embeddings or []
-        if len(embeddings) != len(texts):
-            raise RuntimeError(
-                f"Gemini returned {len(embeddings)} vectors for {len(texts)} inputs."
-            )
-        return [list(emb.values) for emb in embeddings]
+    @staticmethod
+    def _job_state(job: Any) -> str:
+        """Return the batch job's state name (e.g. ``JOB_STATE_RUNNING``)."""
+        state = getattr(job, "state", None)
+        return getattr(state, "name", str(state))
 
-    def _embed_chunk(self, texts: Sequence[str], dim: int) -> List[List[float]]:
-        """Embed a chunk, recursively halving on API errors (e.g. token limits).
-
-        Gemini rejects a request when the batch is too large by *count* or by
-        *token total*. We can't know the token total ahead of time, so on any
-        request failure we split the chunk in half and retry each half, bottoming
-        out at one text per request. This keeps the run going on oversized inputs
-        instead of aborting the whole catalogue.
-        """
-        try:
-            return self._embed_request(texts, dim)
-        except Exception:
-            if len(texts) <= 1:
-                raise
-            mid = len(texts) // 2
-            return self._embed_chunk(texts[:mid], dim) + self._embed_chunk(texts[mid:], dim)
+    def _poll(self, job: Any) -> Any:
+        """Block until the batch job reaches a terminal state, showing progress."""
+        while self._job_state(job) not in self._TERMINAL_STATES:
+            if self._progress is not None:
+                self._progress.tick(suffix=f"batch {self._job_state(job)}…")
+            time.sleep(self.POLL_INTERVAL_SECONDS)
+            job = self._client.batches.get(name=job.name)
+        return job
 
     def embed(self, texts: Sequence[str]) -> List[List[float]]:
         # Google's gemini-embedding-2 model supports up to 3072 dimensions.
-        # If EMBED_DIM exceeds 3072, we cap the requested dimensionality
-        # at 3072 and let pack_vector zero-pad the resulting vectors.
+        # If EMBED_DIM exceeds 3072, we cap the requested dimensionality at 3072
+        # and let pack_vector zero-pad the resulting vectors.
         dim = min(EMBED_DIM, 3072)
         texts = list(texts)
+        if not texts:
+            return []
+
+        # Submit every movie as one inlined embedding request. The Batch API
+        # processes them asynchronously (cheaper, far higher throughput) and
+        # returns one vector per request in the same order.
+        job = self._client.batches.create_embeddings(
+            model=self._model,
+            src={
+                "inlined_requests": {
+                    "contents": texts,
+                    "config": {"output_dimensionality": dim},
+                }
+            },
+        )
+        if self._progress is not None:
+            self._progress.tick(suffix=f"batch submitted ({len(texts)} movies)…")
+
+        job = self._poll(job)
+        state = self._job_state(job)
+        if state != "JOB_STATE_SUCCEEDED":
+            error = getattr(job, "error", None)
+            raise RuntimeError(
+                f"Gemini embedding batch job ended in state {state}"
+                + (f": {error}" if error else ".")
+            )
+
+        dest = getattr(job, "dest", None)
+        responses = getattr(dest, "inlined_embed_content_responses", None) or []
+        if len(responses) != len(texts):
+            raise RuntimeError(
+                f"Gemini batch returned {len(responses)} responses for {len(texts)} inputs."
+            )
+
+        # Responses come back in request order; surface any per-item error.
         vectors: List[List[float]] = []
-        for start in range(0, len(texts), self.MAX_REQUEST_BATCH):
-            chunk = texts[start : start + self.MAX_REQUEST_BATCH]
-            vectors.extend(self._embed_chunk(chunk, dim))
+        for i, item in enumerate(responses):
+            if getattr(item, "error", None):
+                raise RuntimeError(f"Gemini batch item {i} failed: {item.error}")
+            embedding = getattr(getattr(item, "response", None), "embedding", None)
+            values = getattr(embedding, "values", None)
+            if values is None:
+                raise RuntimeError(f"Gemini batch item {i} returned no embedding.")
+            vectors.append(list(values))
         return vectors
 
 
-def make_backend(name: str):
+def make_backend(name: str, progress: Optional[Progress] = None):
     if name == "openai":
         return OpenAIBackend()
     if name == "gemini":
-        return GeminiBackend()
+        return GeminiBackend(progress=progress)
     if name == "local":
         return LocalBackend()
     raise ValueError(f"Unknown backend: {name!r}")
@@ -345,8 +456,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     new_vectors: Dict[int, bytes] = {}
     if pending_indices:
         print(f"Embedding {len(pending_indices)} of {total} movies via '{args.backend}' backend...")
-        backend = make_backend(args.backend)
-        done = 0
+        progress = Progress("Embedding", total=len(pending_indices))
+        backend = make_backend(args.backend, progress=progress)
         for start in range(0, len(pending_indices), args.batch_size):
             chunk = pending_indices[start : start + args.batch_size]
             texts = [movie_text(catalog_io.movie_proto_to_dict(movies[i])) for i in chunk]
@@ -357,8 +468,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 )
             for idx, vector in zip(chunk, vectors):
                 new_vectors[idx] = pack_vector(vector)
-            done += len(chunk)
-            print(f"  embedded {done}/{len(pending_indices)}", flush=True)
+            progress.advance(len(chunk))
+        progress.done(suffix="done")
     else:
         print("All movies already have embeddings — nothing to embed.")
 
