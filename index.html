@@ -553,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 18</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 19</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -1182,7 +1182,6 @@
   // vectors ([[384 floats], ...]) computed by buildTasteProfile(). Cached so the
   // broadcast path never recurses through buildTasteProfile → shareVector.
   let _myCentroids = null;
-  let _inBuildProfile = false;
 
   function myTasteVector() {
     try {
@@ -1191,17 +1190,16 @@
     return (_myCentroids && _myCentroids.length) ? _myCentroids : [];
   }
   // Broadcast my K-Means centroid set (2D array) to the room so peers can match
-  // the group's vibe. An external call recomputes the freshest centroids first
-  // (buildTasteProfile() broadcasts them through its own guarded shareVector()),
-  // while the re-entrant call from inside buildTasteProfile just dispatches the
-  // freshly-cached centroids — avoiding both recursion and double clustering.
+  // the group's vibe. Recompute the freshest centroids first, then dispatch them.
+  // Broadcasting is intentionally kept OUT of buildTasteProfile(): that function
+  // runs on the render/scoring path (renderRecommendations -> getRecommendations),
+  // and dispatching from there would re-enter renderAll() and recurse infinitely.
+  // shareVector() is therefore only called from explicit taste-changing events
+  // (rating a film, watchlist/training updates, embeddings load, peer connect).
   function shareVector() {
-    if (_inBuildProfile) {
-      dispatch({ type: 'setVector', vector: (_myCentroids && _myCentroids.length) ? _myCentroids : [] });
-      return;
-    }
     try { buildTasteProfile(); }
-    catch (e) { dispatch({ type: 'setVector', vector: [] }); }
+    catch (e) { /* embeddings may not be loaded yet */ }
+    dispatch({ type: 'setVector', vector: (_myCentroids && _myCentroids.length) ? _myCentroids : [] });
   }
 
   // ---- Watchlist + training-signal stores -----------------------------------
@@ -2621,13 +2619,10 @@
     const centroids = clusterCentroids(
       positiveSamples, REC_CONFIG.maxCentroids, REC_CONFIG.centroidIters);
 
-    // Cache and broadcast our centroid set (2D array) so peers can max-pool
-    // against every distinct mood we bring to the room. The flag makes the
-    // re-entrant shareVector() just dispatch the cache instead of re-clustering.
+    // Cache our centroid set (2D array) so shareVector() can broadcast it to the
+    // room without re-clustering. Caching only — broadcasting from here would
+    // re-enter renderAll() via dispatch and recurse, so it is the caller's job.
     _myCentroids = centroids;
-    _inBuildProfile = true;
-    try { shareVector(); }
-    finally { _inBuildProfile = false; }
 
     return { centroids, dislikeAnchors, positiveSamples, likedGenres,
              watchedCount: watched.length, ratedCount: rated, hasSignal };
