@@ -553,7 +553,7 @@
   </main>
 
   <footer class="max-w-3xl mx-auto px-4 pb-8 text-center text-[11px] text-slate-600">
-    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 21</b>
+    Serverless P2P over WebRTC · No data leaves your devices except signaling. <b>Version 22</b>
   </footer>
 
   <!-- Hidden file pickers for JSON / Letterboxd CSV imports. -->
@@ -868,7 +868,7 @@
   const dbKey = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]+/g, '');
 
   // Embedding vector dimensionality (must match scripts/generate_embeddings.py).
-  const EMBED_DIM = 384;
+  const EMBED_DIM = 3072;
 
   // Resolve a movie's static embedding vector as a zero-copy Float32Array view
   // straight out of the shared embeddings.bin ArrayBuffer, or null if the buffer
