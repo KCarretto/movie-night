@@ -225,10 +225,14 @@ class GeminiBackend:
         self._model = model_name
 
     def embed(self, texts: Sequence[str]) -> List[List[float]]:
+        # Google's gemini-embedding-2 model supports up to 3072 dimensions.
+        # If EMBED_DIM exceeds 3072, we cap the requested dimensionality
+        # at 3072 and let pack_vector zero-pad the resulting vectors.
+        dim = min(EMBED_DIM, 3072)
         resp = self._client.models.embed_content(
             model=self._model,
             contents=list(texts),
-            config={"output_dimensionality": EMBED_DIM}
+            config={"output_dimensionality": dim}
         )
         if not resp.embeddings:
             return []
