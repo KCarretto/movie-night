@@ -340,6 +340,7 @@ export default function App() {
                   onOpenRec={(rec) => setRecDetail(rec)}
                   onOpenInsights={() => setInsightsOpen(true)}
                   onOpenTrain={() => setTrainOpen(true)}
+                  onOpenRate={openRate}
                 />
               </div>
             )}
@@ -351,6 +352,7 @@ export default function App() {
                   onOpenRec={(rec) => setRecDetail(rec)}
                   onOpenInsights={() => setInsightsOpen(true)}
                   onOpenTrain={() => setTrainOpen(true)}
+                  onOpenRate={openRate}
                 />
               </div>
             )}
@@ -362,6 +364,7 @@ export default function App() {
                   onOpenRec={(rec) => setRecDetail(rec)}
                   onOpenInsights={() => setInsightsOpen(true)}
                   onOpenTrain={() => setTrainOpen(true)}
+                  onOpenRate={openRate}
                 />
               </div>
             )}
@@ -371,7 +374,7 @@ export default function App() {
 
       <footer className="max-w-6xl mx-auto px-3 sm:px-4 pb-6 text-center text-xs text-slate-400">
         <div>Serverless P2P over WebRTC · No data leaves your devices except signaling.</div>
-        <div className="mt-1"><b>Version 31</b></div>
+        <div className="mt-1"><b>Version 32</b></div>
       </footer>
 
       <input
