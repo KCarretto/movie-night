@@ -176,6 +176,19 @@ def movie_dict_to_proto(movie: Dict[str, Any], msg: "catalog_pb2.Movie") -> None
     msg.vote_count = int(movie.get("vote_count", 0) or 0)
     msg.popularity = float(movie.get("popularity", 0.0) or 0.0)
 
+    # Additional metadata fields
+    msg.release_date = str(movie.get("release_date") or "")
+    msg.runtime = int(movie.get("runtime", 0) or 0)
+    msg.budget = int(movie.get("budget", 0) or 0)
+    msg.revenue = int(movie.get("revenue", 0) or 0)
+    for c in movie.get("origin_country") or []:
+        msg.origin_country.append(str(c))
+    msg.vote_average = float(movie.get("vote_average", 0.0) or 0.0)
+    msg.status = str(movie.get("status") or "")
+    msg.imdb_id = str(movie.get("imdb_id") or "")
+    for k in movie.get("keywords") or []:
+        msg.keywords.append(str(k))
+
 
 def movie_proto_to_dict(msg: "catalog_pb2.Movie") -> Dict[str, Any]:
     """Inflate a ``catalog_pb2.Movie`` back to our internal dict representation."""
@@ -206,6 +219,27 @@ def movie_proto_to_dict(msg: "catalog_pb2.Movie") -> Dict[str, Any]:
         movie["vote_count"] = msg.vote_count
     if msg.popularity:
         movie["popularity"] = msg.popularity
+    if msg.release_date:
+        movie["release_date"] = msg.release_date
+    if msg.runtime:
+        movie["runtime"] = msg.runtime
+    if msg.budget:
+        movie["budget"] = msg.budget
+    if msg.revenue:
+        movie["revenue"] = msg.revenue
+    if msg.origin_country:
+        movie["origin_country"] = list(msg.origin_country)
+    if msg.vote_average:
+        movie["vote_average"] = msg.vote_average
+    if msg.status:
+        movie["status"] = msg.status
+    if msg.imdb_id:
+        movie["imdb_id"] = msg.imdb_id
+    if msg.keywords:
+        movie["keywords"] = list(msg.keywords)
+    # Also provide the key "id" for compatibility if requested
+    if msg.id:
+        movie["id"] = msg.id
     return movie
 
 
