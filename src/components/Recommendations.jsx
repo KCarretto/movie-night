@@ -1,51 +1,99 @@
-import { useMemo, useRef } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { MAX_NOMINATIONS } from '../lib/constants.js';
 import { emit } from '../lib/runtime.js';
 import { LANGUAGE_INFO } from '../lib/format.js';
-import { getRecommendations, recommendationDataStatus } from '../lib/recengine.js';
+import {
+  getRecommendations, recommendationDataStatus, markRankingStale,
+} from '../lib/recengine.js';
+import {
+  inWatchlist, addToWatchlist, removeFromWatchlist, markNotInterested,
+} from '../lib/storage.js';
+import { actions, afterTasteChange } from '../state/controller.js';
 import { useStore } from '../state/useStore.js';
+import MultiSelect from '../ui/MultiSelect.jsx';
 import RecCard from './RecCard.jsx';
 
-function toggleItem(arr, item) {
-  const idx = arr.indexOf(item);
-  if (idx === -1) return [...arr, item];
-  return arr.filter((x) => x !== item);
-}
+// How long to hold the first-load shimmer before falling back to popularity-only
+// picks if the embedding vectors still haven't arrived.
+const REC_EMBEDDINGS_TIMEOUT_MS = 30000;
 
-export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain }) {
+export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain, onOpenRate }) {
   const rt = useStore();
   const trackRef = useRef(null);
-  const dataStatus = recommendationDataStatus();
-  const recs = getRecommendations();
+  const [embeddingsTimedOut, setEmbeddingsTimedOut] = useState(false);
 
-  const genres = useMemo(() => {
+  // Hold on the skeleton shimmer until embeddings land (or we give up waiting)
+  // so the first picks the viewer sees are embedding-powered, not popularity
+  // placeholders. Mirrors the original single-file app's first-load behaviour.
+  const embeddingsPending = !rt.EMBEDDINGS_BUFFER
+    && rt.embeddingsStatus !== 'error'
+    && rt.embeddingsStatus !== 'idle'
+    && !embeddingsTimedOut;
+
+  useEffect(() => {
+    if (!embeddingsPending) return undefined;
+    const t = setTimeout(() => setEmbeddingsTimedOut(true), REC_EMBEDDINGS_TIMEOUT_MS);
+    return () => clearTimeout(t);
+  }, [embeddingsPending]);
+
+  const dataStatus = recommendationDataStatus();
+  const recs = embeddingsPending ? { list: [], personalised: false, totalAvailable: 0 } : getRecommendations();
+
+  const genreOptions = useMemo(() => {
     const s = new Set();
-    for (const m of rt.MOVIE_DB) (m.genres || []).forEach((g) => s.add(g));
-    return [...s].sort((a, b) => a.localeCompare(b)).slice(0, 32);
+    for (const m of rt.MOVIE_DB) (m.genres || []).forEach((g) => { if (g && g !== 'Unknown') s.add(g); });
+    return [...s].sort((a, b) => a.localeCompare(b)).map((g) => ({ value: g, label: g }));
   }, [rt.MOVIE_DB]);
 
-  const languages = useMemo(() => {
+  const languageOptions = useMemo(() => {
     const s = new Set();
     for (const m of rt.MOVIE_DB) if (m.language) s.add(m.language);
-    return [...s].sort().slice(0, 16);
+    return [...s]
+      .map((code) => {
+        const info = LANGUAGE_INFO[code];
+        return { value: code, label: info ? `${info.flag} ${info.name}` : code.toUpperCase() };
+      })
+      .sort((a, b) => a.label.localeCompare(b.label));
   }, [rt.MOVIE_DB]);
 
-  const forceRefresh = () => {
+  // Changing a filter rebuilds the carousel from the top rather than appending.
+  const applyFilterChange = () => {
+    markRankingStale();
     getRecommendations({ forceRefresh: true });
     emit();
   };
+  const setGenres = (next) => { rt.activeSelectedGenres = next; applyFilterChange(); };
+  const setLanguages = (next) => { rt.activeSelectedLanguages = next; applyFilterChange(); };
 
-  const setGenres = (next) => { rt.activeSelectedGenres = next; emit(); };
-  const setLanguages = (next) => { rt.activeSelectedLanguages = next; emit(); };
+  const forceRefresh = () => { getRecommendations({ forceRefresh: true }); emit(); };
 
-  const shimmer = rt.embeddingsStatus === 'loading' && recs.list.length === 0;
+  // ---- rec-card actions ----
+  const movies = rt.state?.movies || [];
+  const myCount = movies.filter((m) => m.by === rt.myId).length;
+  const canNominate = rt.state?.phase === 'lobby' && myCount < MAX_NOMINATIONS;
+
+  const onNominate = (m) => { actions.nominate(m.title, m.id || m.tmdbId); emit(); };
+  const onWatchlist = (m) => {
+    if (inWatchlist(m.title)) removeFromWatchlist(m.title);
+    else addToWatchlist(m.title);
+    afterTasteChange();
+  };
+  const onNotInterested = (m) => { markNotInterested(m.title); markRankingStale(); afterTasteChange(); };
+  const onWatched = (m) => onOpenRate?.(m.title);
+
+  const shimmer = embeddingsPending;
 
   return (
-    <section className="card p-4 sm:p-5">
+    <section className="card p-4 sm:p-5 min-w-0">
       <div className="flex flex-wrap items-center gap-2.5 mb-3">
         <h2 className="text-lg font-semibold text-white mr-auto">Recommendations</h2>
-        <button type="button" className="btn px-3 py-1.5 rounded-lg border border-line bg-panel2 text-xs" onClick={onOpenTrain}>Improve</button>
+        <button type="button" className="btn btn-primary px-3 py-1.5 rounded-lg text-xs font-semibold text-white" onClick={onOpenTrain}>
+          <i className="fa-solid fa-wand-magic-sparkles mr-1" />Improve
+        </button>
         <button type="button" className="btn px-3 py-1.5 rounded-lg border border-line bg-panel2 text-xs" onClick={onOpenInsights}>Insights</button>
-        <button type="button" className="btn px-3 py-1.5 rounded-lg border border-line bg-panel2 text-xs" onClick={forceRefresh}>Refresh</button>
+        <button type="button" className="btn px-3 py-1.5 rounded-lg border border-line bg-panel2 text-xs" onClick={forceRefresh}>
+          <i className="fa-solid fa-rotate-right mr-1" />Refresh
+        </button>
         {dataStatus && (
           <span className="text-xs text-slate-300 inline-flex items-center gap-1.5" title={dataStatus.message}>
             <span className={`dot ${dataStatus.level === 'loading' ? 'pulse' : ''} ${dataStatus.level === 'error' ? 'bg-rose-400' : 'bg-amber-400'}`} />
@@ -54,39 +102,23 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
         )}
       </div>
 
-      <div className="space-y-2 mb-3">
-        <div className="flex flex-wrap gap-1.5">
-          {genres.map((g) => {
-            const on = rt.activeSelectedGenres.includes(g);
-            return (
-              <button
-                key={g}
-                type="button"
-                className={`genre-tag ${on ? '!border-accent2 !text-white' : ''}`}
-                onClick={() => setGenres(toggleItem(rt.activeSelectedGenres, g))}
-              >
-                {g}
-              </button>
-            );
-          })}
-        </div>
-        <div className="flex flex-wrap gap-1.5">
-          {languages.map((code) => {
-            const info = LANGUAGE_INFO[code];
-            const label = info ? `${info.flag} ${info.name}` : code.toUpperCase();
-            const on = rt.activeSelectedLanguages.includes(code);
-            return (
-              <button
-                key={code}
-                type="button"
-                className={`lang-badge ${on ? '!border-accent2 !text-white' : ''}`}
-                onClick={() => setLanguages(toggleItem(rt.activeSelectedLanguages, code))}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
+      <div className="flex flex-wrap items-center gap-2 mb-3">
+        <MultiSelect
+          icon="fa-solid fa-masks-theater"
+          allText="All genres"
+          countSuffix="genres"
+          options={genreOptions}
+          selected={rt.activeSelectedGenres}
+          onChange={setGenres}
+        />
+        <MultiSelect
+          icon="fa-solid fa-language"
+          allText="All languages"
+          countSuffix="languages"
+          options={languageOptions}
+          selected={rt.activeSelectedLanguages}
+          onChange={setLanguages}
+        />
       </div>
 
       <div className="relative">
@@ -97,19 +129,35 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
           <i className="fa-solid fa-chevron-right" />
         </button>
 
-        <div className="rec-track" ref={trackRef}>
-          {shimmer && Array.from({ length: 6 }).map((_, i) => (
-            <div key={i} className="rec-card rec-shimmer">
-              <div className="shimmer-block shimmer-poster" />
-              <div className="p-2.5 space-y-2">
-                <div className="shimmer-block h-3" />
-                <div className="shimmer-block h-3 w-2/3" />
+        <div className="rec-track" ref={trackRef} role="list" aria-label="Recommended movies">
+          {shimmer && Array.from({ length: 8 }).map((_, i) => (
+            <div key={i} className="rec-card rec-shimmer" aria-hidden="true">
+              <div className="relative overflow-hidden rounded-t-xl">
+                <div className="shimmer-block shimmer-poster" />
+              </div>
+              <div className="p-2 flex flex-col gap-2 flex-1">
+                <div className="shimmer-block" style={{ height: 12, width: '85%' }} />
+                <div className="shimmer-block" style={{ height: 12, width: '55%' }} />
+                <div className="mt-auto flex flex-col gap-1.5">
+                  <div className="shimmer-block" style={{ height: 26, width: '100%' }} />
+                  <div className="shimmer-block" style={{ height: 26, width: '100%' }} />
+                </div>
               </div>
             </div>
           ))}
 
           {!shimmer && recs.list.map((rec) => (
-            <RecCard key={`${rec.movie.id || rec.movie.title}-${rec.score}`} rec={rec} onOpen={onOpenRec} />
+            <RecCard
+              key={`${rec.movie.id || rec.movie.title}-${rec.score}`}
+              rec={rec}
+              onOpen={onOpenRec}
+              onNominate={onNominate}
+              onWatchlist={onWatchlist}
+              onWatched={onWatched}
+              onNotInterested={onNotInterested}
+              canNominate={canNominate}
+              onWatchlistState={inWatchlist(rec.movie.title)}
+            />
           ))}
 
           {!shimmer && recs.list.length === 0 && (
@@ -119,7 +167,9 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
       </div>
 
       <div className="mt-2 text-xs text-slate-400">
-        {recs.personalised ? 'Personalised picks' : 'Popularity-first picks'} · {recs.totalAvailable} candidates
+        {shimmer
+          ? 'Personalising…'
+          : `${recs.personalised ? 'Personalised picks' : 'Popularity-first picks'} · ${recs.totalAvailable} candidates`}
       </div>
     </section>
   );

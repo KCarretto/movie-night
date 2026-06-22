@@ -29,11 +29,20 @@ export async function loadEmbeddings({ onReady } = {}) {
   try {
     let buf;
     // 1. Try to load chunked embeddings starting from part 0.
+    //
+    // A part "exists" only when the response is OK *and* it is actually the
+    // binary file. A dev/preview SPA server (and a custom 404 page) answers
+    // requests for missing paths with the HTML app shell and a 200 status, so
+    // relying on `res.ok` alone would loop forever past the last real part,
+    // appending HTML into the embedding buffer. Gate on the content-type so the
+    // loop stops at the first non-binary (HTML) response, which marks the end.
+    const isBinaryPart = (res) =>
+      res.ok && !(res.headers.get('content-type') || '').toLowerCase().includes('text/html');
     let partIdx = 0;
     const chunks = [];
     let res = await fetch(`data/embeddings_part${partIdx}.bin`, { cache: 'no-cache' });
-    if (res.ok) {
-      while (res.ok) {
+    if (isBinaryPart(res)) {
+      while (isBinaryPart(res)) {
         const chunkBuf = await res.arrayBuffer();
         chunks.push(new Uint8Array(chunkBuf));
         partIdx++;
