@@ -7,7 +7,7 @@ export default function Header({ showHistory, onToggleHistory, onSettingsAction 
   return (
     <header className="sticky top-0 z-30 border-b border-line/80 bg-ink/75 backdrop-blur">
       <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3 flex items-center gap-3">
-        <button type="button" className="flex items-center gap-2 min-w-0" onClick={() => onToggleHistory(false)}>
+        <button type="button" className="flex items-center gap-2 min-w-0" onClick={() => window.location.href = '/'}>
           <span className="w-9 h-9 rounded-lg bg-gradient-to-br from-accent to-accent2 flex items-center justify-center text-white">
             <i className="fa-solid fa-film" aria-hidden="true" />
           </span>
@@ -22,11 +22,12 @@ export default function Header({ showHistory, onToggleHistory, onSettingsAction 
           <div className="hidden sm:block text-xs text-slate-300">You are <b className="text-white">{rt.myName || '…'}</b></div>
           <button
             type="button"
-            className={`btn px-3 py-2 rounded-lg border text-sm ${showHistory ? 'bg-accent2/20 border-accent2 text-white' : 'bg-panel2 border-line text-slate-200'}`}
+            className={`btn w-9 h-9 flex items-center justify-center rounded-lg border text-sm ${showHistory ? 'bg-accent2/20 border-accent2 text-white' : 'bg-panel2 border-line text-slate-200'}`}
             onClick={() => onToggleHistory(!showHistory)}
+            aria-label={showHistory ? 'Room' : 'History'}
+            title={showHistory ? 'Room' : 'History'}
           >
-            <i className={`fa-solid ${showHistory ? 'fa-house' : 'fa-clock-rotate-left'} mr-1.5`} />
-            {showHistory ? 'Room' : 'History'}
+            <i className={`fa-solid ${showHistory ? 'fa-house' : 'fa-clock-rotate-left'}`} aria-hidden="true" />
           </button>
           <SettingsMenu onAction={onSettingsAction} />
         </div>

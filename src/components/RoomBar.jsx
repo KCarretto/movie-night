@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { MAX_NAME_LEN } from '../lib/constants.js';
 import { cleanName } from '../lib/constants.js';
-import { saveName } from '../lib/storage.js';
+import { saveName, loadSavedName } from '../lib/storage.js';
 import { actions, shareUrl } from '../state/controller.js';
 import { useStore } from '../state/useStore.js';
 
@@ -16,6 +16,7 @@ export default function RoomBar() {
   const scannerRef = useRef(null);
   const scannerId = 'qr-reader';
   const url = useMemo(() => shareUrl(), [rt.roomId]);
+  const hasNameSet = Boolean(loadSavedName());
 
   useEffect(() => { setName(rt.myName || ''); }, [rt.myName]);
 
@@ -74,17 +75,19 @@ export default function RoomBar() {
         <div className="space-y-3">
           <div className="text-xs uppercase tracking-wide text-slate-400">Room</div>
           <div className="text-xl sm:text-2xl font-display text-white">{rt.roomId || '…'}</div>
-          <form className="flex items-center gap-2" onSubmit={submitName}>
-            <input
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              maxLength={MAX_NAME_LEN}
-              className="w-56 max-w-full bg-panel2 border border-line rounded-lg px-3 py-2 text-sm"
-              placeholder="Your name"
-              aria-label="Display name"
-            />
-            <button type="submit" className="btn btn-accent2 px-3 py-2 rounded-lg text-sm text-white">Save</button>
-          </form>
+          {!hasNameSet && (
+            <form className="flex items-center gap-2" onSubmit={submitName}>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                maxLength={MAX_NAME_LEN}
+                className="w-56 max-w-full bg-panel2 border border-line rounded-lg px-3 py-2 text-sm"
+                placeholder="Your name"
+                aria-label="Display name"
+              />
+              <button type="submit" className="btn btn-accent2 px-3 py-2 rounded-lg text-sm text-white">Save</button>
+            </form>
+          )}
         </div>
 
         {rt.isHost ? (

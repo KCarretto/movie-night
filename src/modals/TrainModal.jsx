@@ -46,9 +46,9 @@ export default function TrainModal({ open, onClose, onRate }) {
             <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={() => { markNotInterested(movie.title); tasteTouch(); bump(); }}>Not for me</button>
             <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={() => { markNotSure(movie.title); tasteTouch(); bump(); }}>Not sure</button>
           </div>
-          <div className="flex items-center justify-between">
-            <button type="button" className="text-sm text-accent2 hover:text-white" onClick={() => onRate?.(movie.title)}>I’ve seen this</button>
-            <button type="button" className="text-sm text-slate-400 hover:text-white" onClick={bump}>Next</button>
+          <div className="grid grid-cols-2 gap-2 pt-1 border-t border-line/50">
+            <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={() => onRate?.(movie.title)}>I’ve seen this</button>
+            <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={bump}>Skip</button>
           </div>
         </div>
       )}
