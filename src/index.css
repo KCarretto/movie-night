@@ -1,0 +1,184 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+    :root { color-scheme: dark; }
+    html, body { height: 100%; }
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background:
+        radial-gradient(1200px 600px at 20% -10%, rgba(124,92,255,.18), transparent 60%),
+        radial-gradient(1000px 500px at 100% 0%, rgba(255,61,110,.16), transparent 55%),
+        #0b0d12;
+      /* Pin the gradient to the viewport and never repeat it, so the backdrop
+         stays one seamless wash on tall pages (e.g. the results screen) instead
+         of tiling/banding as you scroll. */
+      background-repeat: no-repeat;
+      background-attachment: fixed;
+      background-size: cover;
+      -webkit-tap-highlight-color: transparent;
+    }
+    .font-display { font-family: 'Bebas Neue', system-ui, sans-serif; letter-spacing: .03em; }
+
+    /* Soft card surface */
+    .card {
+      background: linear-gradient(180deg, rgba(28,33,45,.9), rgba(20,24,33,.9));
+      border: 1px solid #2a3242;
+      border-radius: 1rem;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+    }
+
+    /* Pulsing status dot */
+    .dot { width: 10px; height: 10px; border-radius: 50%; }
+    .dot.pulse { animation: pulse 1.4s infinite; }
+    @keyframes pulse { 0%{box-shadow:0 0 0 0 rgba(124,92,255,.55)} 70%{box-shadow:0 0 0 8px rgba(124,92,255,0)} 100%{box-shadow:0 0 0 0 rgba(124,92,255,0)} }
+
+    /* Draggable rank rows. The `transform` transition lets sibling rows glide
+       to their new spot (FLIP) and the lifted row settle back smoothly. */
+    .rank-row { transition: box-shadow .15s ease, opacity .15s ease, transform .2s cubic-bezier(.2,.8,.2,1); }
+    /* The row under the finger follows the pointer with no transition lag and
+       floats above its neighbours while lifted. */
+    .rank-row.dragging { opacity: .95; box-shadow: 0 12px 28px rgba(0,0,0,.55); border-color: #7c5cff; transition: none; position: relative; z-index: 5; }
+    .rank-row.drag-over { border-color: #7c5cff; }
+    /* While a ballot row is reorderable, `touch-action:none` lets us own the
+       whole row's touch gestures so a vertical drag reorders (never scrolls). */
+    .rank-row.draggable { touch-action: none; cursor: grab; user-select: none; -webkit-user-select: none; }
+    .rank-row.draggable:active { cursor: grabbing; }
+    /* Drag handle — visual affordance; the entire row is grabbable. */
+    .drag-handle { cursor: grab; user-select: none; -webkit-user-select: none; }
+
+    /* Winner celebration */
+    @keyframes popIn { 0%{transform:scale(.8);opacity:0} 60%{transform:scale(1.04)} 100%{transform:scale(1);opacity:1} }
+    .pop-in { animation: popIn .5s cubic-bezier(.2,.8,.2,1) both; }
+
+    /* Confetti pieces */
+    .confetti { position: fixed; top: -12px; width: 9px; height: 14px; opacity: .9; z-index: 50; will-change: transform; }
+    @keyframes fall { to { transform: translateY(110vh) rotate(720deg); } }
+
+    .btn { transition: transform .08s ease, filter .15s ease, background .15s ease; }
+    .btn:active { transform: translateY(1px) scale(.99); }
+    .btn-primary { background: linear-gradient(180deg,#ff5a83,#ff3d6e); }
+    .btn-primary:hover { filter: brightness(1.05); }
+    .btn-accent2 { background: linear-gradient(180deg,#8b6dff,#7c5cff); }
+
+    /* Hide number input spinners */
+    input[type=number]::-webkit-outer-spin-button,
+    input[type=number]::-webkit-inner-spin-button { -webkit-appearance: none; margin: 0; }
+
+    /* iOS/Chrome-mobile auto-zooms when focusing inputs smaller than 16px and
+       can then get "stuck" zoomed-in, blocking scroll. Force 16px on touch. */
+    @media (max-width: 640px) {
+      input, select, textarea { font-size: 16px !important; }
+    }
+
+    /* Avoid double-tap zoom getting stuck on tappable controls. */
+    button, a, .btn { touch-action: manipulation; }
+
+    /* Settings cog dropdown menu */
+    .menu { position: absolute; right: 0; top: calc(100% + 6px); min-width: 160px; z-index: 40; }
+
+    /* Native <select> dropdowns (e.g. the watched-history sort control). Force
+       the option popup onto the dark theme so the list renders legibly on every
+       browser instead of falling back to a light/system-coloured menu. */
+    select { color-scheme: dark; }
+    select option { background-color: #1c212d; color: #e2e8f0; }
+
+    /* Typeahead suggestion dropdown for the movie nomination input. */
+    .typeahead { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 45;
+      max-height: 320px; overflow-y: auto; }
+    .ta-item { cursor: pointer; }
+    .ta-item:hover, .ta-item.active { background: #1c212d; }
+    /* Poster thumbnails (recommendations / history). Fallback gradient shows
+       through if the <img> fails to load. */
+    .poster { background: linear-gradient(135deg,#2a3242,#141821); object-fit: cover; }
+
+    /* "Seen by" hover tooltip on the 👀 indicator. */
+    .seen-wrap { position: relative; }
+    .seen-pop { position: absolute; right: 0; top: calc(100% + 6px); min-width: 180px; z-index: 50;
+      display: none; }
+    .seen-wrap:hover .seen-pop, .seen-wrap.open .seen-pop { display: block; }
+
+    /* Genre chips on ranked choices. */
+    .genre-tag { font-size: 10px; line-height: 1; padding: 3px 7px; border-radius: 9999px;
+      background: #1c212d; border: 1px solid #2a3242; color: #b9c2d0; white-space: nowrap; }
+
+    /* Country-flag badge for non-English films in the rankings display. */
+    .lang-badge { font-size: 10px; line-height: 1; padding: 3px 7px; border-radius: 9999px;
+      background: #1c212d; border: 1px solid #2a3242; color: #b9c2d0; white-space: nowrap;
+      display: inline-flex; align-items: center; gap: 4px; }
+
+    /* Description tooltip shown when hovering/focusing a ranked choice. */
+    .desc-wrap { position: relative; }
+    .desc-pop { position: absolute; left: 0; right: 0; top: calc(100% + 6px); z-index: 50;
+      display: none; font-size: 12px; line-height: 1.4; color: #cbd5e1; padding: 10px 12px; }
+    .desc-wrap:hover .desc-pop, .desc-wrap:focus-within .desc-pop, .desc-wrap.open .desc-pop { display: block; }
+
+    /* Recommended-movies carousel: a horizontally scrollable, snap-aligned row
+       of poster cards with optional prev/next nav buttons on wider screens. */
+    .rec-track { display: flex; gap: 12px; overflow-x: auto; scroll-behavior: smooth;
+      scroll-snap-type: x proximity; padding: 2px 2px 10px; -webkit-overflow-scrolling: touch; }
+    .rec-track::-webkit-scrollbar { height: 6px; }
+    .rec-track::-webkit-scrollbar-thumb { background: #2a3242; border-radius: 9999px; }
+    .rec-card { scroll-snap-align: start; flex: 0 0 150px; width: 150px; background: #141821;
+      border: 1px solid #2a3242; border-radius: 12px; overflow: visible; display: flex; flex-direction: column;
+      cursor: pointer; transition: border-color .15s ease, transform .1s ease; }
+    .rec-card:hover, .rec-card:focus-within { border-color: #7c5cff; }
+    .rec-card:active { transform: translateY(1px); }
+    .rec-poster { width: 100%; height: 200px; border-radius: 0; }
+    /* Loading spinner (recommendation refresh + training wizard). */
+    .spinner { width: 34px; height: 34px; border-radius: 50%;
+      border: 3px solid rgba(124,92,255,.25); border-top-color: #7c5cff;
+      animation: spin .7s linear infinite; display: inline-block; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    /* Skeleton shimmer shown in the carousel on first load while the embedding
+       vectors download, so we never flash un-personalised picks before they
+       arrive (a 30s timeout falls back to showing recs without embeddings). */
+    .rec-shimmer { cursor: default; }
+    .rec-shimmer:hover, .rec-shimmer:focus-within { border-color: #2a3242; }
+    .shimmer-block { position: relative; overflow: hidden; background: #1b2130; border-radius: 6px; }
+    .shimmer-block::after { content: ""; position: absolute; inset: 0;
+      transform: translateX(-100%);
+      background: linear-gradient(90deg, transparent, rgba(124,92,255,.14), transparent);
+      animation: shimmer 1.3s ease-in-out infinite; }
+    @keyframes shimmer { 100% { transform: translateX(100%); } }
+    .shimmer-poster { width: 100%; height: 200px; border-radius: 0; }
+    .rec-title { display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      overflow: hidden; }
+    /* Insights cluster map */
+    .insights-svg { width: 100%; height: auto; display: block; background:
+      radial-gradient(circle at 50% 40%, rgba(124,92,255,.06), transparent 70%); border-radius: 12px; }
+    .insights-node { cursor: default; }
+    .insights-node[data-title] { cursor: pointer; }
+    .insights-legend-dot { width: 10px; height: 10px; border-radius: 9999px; display: inline-block; flex: none; }
+    .rec-badge { position: absolute; top: 8px; left: 8px; font-size: 10px; line-height: 1;
+      padding: 3px 7px; border-radius: 9999px; background: rgba(124,92,255,.92); color: #fff;
+      letter-spacing: .04em; }
+    .rec-nav { position: absolute; top: 92px; z-index: 6; width: 34px; height: 34px; border-radius: 9999px;
+      background: rgba(20,24,33,.9); border: 1px solid #2a3242; color: #cbd5e1; display: none;
+      align-items: center; justify-content: center; cursor: pointer; }
+    .rec-nav:hover { color: #fff; border-color: #3a4760; }
+    .rec-prev { left: -6px; } .rec-next { right: -6px; }
+    @media (min-width: 640px) { .rec-nav { display: flex; } }
+
+    /* Backdrop collage built from the art of the currently nominated movies.
+       A lightly-blurred, tiled mosaic (columns of posters, repeated vertically)
+       so the page takes on the flavour of the current options while staying
+       readable. The `.winner` variant swaps in the winning movie's art as a
+       single, even-less-blurred cover image. */
+    #bgArt { position: fixed; inset: 0; z-index: -1; pointer-events: none;
+      background-position: center; background-repeat: repeat-y;
+      filter: blur(12px) saturate(1.15) brightness(.45); transform: scale(1.06);
+      opacity: 0; transition: opacity .8s ease; }
+    #bgArt.winner { background-repeat: no-repeat; background-size: cover;
+      filter: blur(7px) saturate(1.15) brightness(.5); }
+    #bgArt.show { opacity: 1; }
+
+    /* Sync share QR code. qrcode.js renders a fixed-pixel <canvas>/<img>; we
+       scale those children responsively so the code is large and crisp on
+       phones (where this flow is most used) while staying tidy on desktop. */
+    .qr-box :where(canvas, img) { width: 100%; height: auto; display: block; image-rendering: pixelated; }
+    .qr-box { width: 300px; max-width: 86vw; cursor: zoom-in; }
+    @media (min-width: 640px) { .qr-box { width: 200px; max-width: none; cursor: zoom-in; } }
+    /* Enlarged QR shown in the zoom dialog. */
+    .qr-box-zoom :where(canvas, img) { width: 100%; height: auto; display: block; image-rendering: pixelated; }
+    .qr-box-zoom { width: min(86vw, 86vh, 520px); }
