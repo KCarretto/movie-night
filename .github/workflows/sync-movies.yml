@@ -1,16 +1,17 @@
 name: Sync movie catalogue
 
-# Refreshes movies.pbf from TMDB (+ OMDb) at build time and commits the result.
+# Refreshes public/data/movies.pbf from TMDB (+ OMDb) at build time and commits the result.
 # Runs twice a day, or on demand from the Actions tab. Each run:
 #   1. Compiles the Protobuf bindings from scripts/catalog.proto.
 #   2. Downloads TMDB's daily id export (movie_ids_MM_DD_YYYY.json.gz) and unzips
 #      it. A failed download is non-fatal — the sync continues without it.
 #   3. Runs scripts/sync.py to import any ids from that export *and* discover
-#      500 pages of TMDB movies, writing the dense binary catalogue movies.pbf.
+#      500 pages of TMDB movies, writing the dense binary catalogue
+#      public/data/movies.pbf.
 #      Existing entries missing language/cast/director are backfilled in batches.
 #   4. Generates ML embeddings for any new movies (scripts/generate_embeddings.py)
-#      into the packed binary embeddings.bin and stamps each record's v_idx.
-#   5. Commits and pushes the updated movies.pbf + embeddings.bin to main.
+#      into the packed binary public/data/embeddings*.bin and stamps each record's v_idx.
+#   5. Commits and pushes the updated public/data/ catalogue + embeddings to main.
 #
 # Requires repository secrets:
 #   TMDB_API_KEY  (required) — https://www.themoviedb.org/settings/api
@@ -70,6 +71,7 @@ jobs:
           OMDB_API_KEY: ${{ secrets.OMDB_API_KEY }}
         run: |
           python3 scripts/sync.py \
+            --output public/data/movies.pbf \
             --pages "${{ github.event.inputs.pages || '500' }}" \
             --ids-file "$IDS_FILE"
 
@@ -79,16 +81,16 @@ jobs:
       - name: Generate embeddings
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python3 scripts/generate_embeddings.py --movies movies.pbf --embeddings embeddings.bin --backend gemini --dim 3072
+        run: python3 scripts/generate_embeddings.py --movies public/data/movies.pbf --embeddings public/data/embeddings.bin --backend gemini --dim 3072
 
       - name: Commit changes
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          if git diff --quiet -- movies.pbf embeddings.bin; then
-            echo "movies.pbf and embeddings.bin unchanged — nothing to commit."
+          git add -A public/data
+          if git diff --cached --quiet; then
+            echo "public/data unchanged — nothing to commit."
           else
-            git add movies.pbf embeddings.bin
-            git commit -m "chore: sync movies.pbf + embeddings.bin from TMDB/OMDb"
+            git commit -m "chore: sync movies.pbf + embeddings from TMDB/OMDb"
             git push origin HEAD:main
           fi

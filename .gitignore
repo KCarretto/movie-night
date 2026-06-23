@@ -8,3 +8,12 @@ __pycache__/
 
 # Generated Protobuf bindings (built from scripts/catalog.proto at build time).
 scripts/catalog_pb2.py
+
+# Node / Vite build tooling.
+node_modules/
+# Vite build output (the served GitHub Pages root is produced here on demand;
+# the committed source of the data files lives in public/data/).
+build/
+.vite/
+npm-debug.log*
+

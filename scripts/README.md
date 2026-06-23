@@ -1,6 +1,7 @@
 # Movie catalogue sync
 
-`movies.pbf` (the recommendation database the app reads at runtime) is **not**
+`movies.pbf` (the recommendation database the app reads at runtime, served
+from `public/data/` → `build/data/`) is **not**
 hand-maintained. Movie Night is a serverless static site, so we cannot safely
 call a movie API from the browser (it would leak an API key and hit CORS/rate
 limits). Instead we generate the catalogue at build time with
@@ -29,7 +30,7 @@ python -m grpc_tools.protoc -I scripts --python_out scripts scripts/catalog.prot
 ```bash
 export TMDB_API_KEY=xxxxxxxx     # required — https://www.themoviedb.org/settings/api
 export OMDB_API_KEY=yyyyyyyy     # optional — https://www.omdbapi.com/apikey.aspx
-python3 scripts/sync.py --pages 25 --output movies.pbf
+python3 scripts/sync.py --pages 25 --output public/data/movies.pbf
 ```
 
 - `--pages 25` pulls ~1,000 movies (TMDB returns 20 per page; the script reads
@@ -75,7 +76,7 @@ UI renders instantly; the browser lazy-loads the vectors in the background).
 
 ```bash
 pip install google-genai protobuf            # gemini backend (default, requires GEMINI_API_KEY)
-GEMINI_API_KEY=... python3 scripts/generate_embeddings.py --movies movies.pbf --embeddings embeddings.bin
+GEMINI_API_KEY=... python3 scripts/generate_embeddings.py --movies public/data/movies.pbf --embeddings public/data/embeddings.bin
 ```
 
 - Default backend is Google's **Gemini** (`gemini-embedding-2`, 3072-dim vectors).
@@ -113,6 +114,7 @@ GEMINI_API_KEY=... python3 scripts/generate_embeddings.py --movies movies.pbf --
 22:00 UTC, or on demand from the Actions tab). It compiles the Protobuf bindings,
 downloads and unzips TMDB's daily id export, runs `sync.py` to import those ids
 and discover 500 pages of movies, then runs `generate_embeddings.py` for any new
-titles, and commits any changes to `movies.pbf` and `embeddings.bin` on `main`.
+titles, and commits any changes under `public/data/` (the catalogue + embedding
+binaries) on `main`.
 Add `TMDB_API_KEY` (and optionally `OMDB_API_KEY`) as repository secrets to
 enable it.
