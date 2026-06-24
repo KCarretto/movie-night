@@ -27,7 +27,7 @@ import {
   upsertWatched,
 } from './lib/storage.js';
 import { runtime, emit } from './lib/runtime.js';
-import { markRankingStale } from './lib/recengine.js';
+import { markRankingStale, replaceRecommendation } from './lib/recengine.js';
 import { actions, afterTasteChange, boot, shareSeen } from './state/controller.js';
 import { useStore } from './state/useStore.js';
 import { startSyncReceive } from './lib/syncpeer.js';
@@ -160,6 +160,7 @@ export default function App() {
 
   const handleRateSave = (rating) => {
     upsertWatched(rateState.title, rating);
+    replaceRecommendation(rateState.title);
     markRankingStale();
     shareSeen();
     afterTasteChange();

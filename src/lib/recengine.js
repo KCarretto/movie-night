@@ -323,6 +323,7 @@ function recSignature() {
   const hist = loadHistory().length;
   const intr = loadInterested().map((x) => normTitle(x.title) + ':' + (x.interest || 0)).join('|');
   const ni = loadNotInterested().map((x) => normTitle(x.title)).join('|');
+  const watched = loadWatched().map((w) => normTitle(w.title) + ':' + (w.rating || 0)).join('|');
   const seen = (runtime.state && runtime.state.seen) || {};
   const seenSig = Object.keys(seen).filter((pid) => pid !== runtime.myId).sort().map((pid) =>
     pid + ':' + (Array.isArray(seen[pid]) ? seen[pid].length : 0)).join('|');
@@ -331,7 +332,7 @@ function recSignature() {
   const embReady = runtime.EMBEDDINGS_BUFFER ? '1' : '0';
   const filt = runtime.activeSelectedGenres.join(',') + '/' + runtime.activeSelectedLanguages.join(',');
   return runtime.MOVIE_DB.length + '#' + hist
-       + '#' + intr + '#' + ni
+       + '#' + intr + '#' + ni + '#' + watched
        + '#' + seenSig + '#' + pvSig + '#' + embReady + '#' + filt;
 }
 
