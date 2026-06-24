@@ -33,6 +33,12 @@ export default function RecDetailModal({ open, rec, onClose, onRate }) {
             <LanguageBadge movie={m} />
             <GenreTags movie={m} />
           </div>
+
+          <div className="text-sm text-slate-300 space-y-1">
+            {m.director?.length > 0 && <div><strong>Director:</strong> {Array.isArray(m.director) ? m.director.join(', ') : m.director}</div>}
+            {m.cast?.length > 0 && <div><strong>Cast:</strong> {Array.isArray(m.cast) ? m.cast.join(', ') : m.cast}</div>}
+          </div>
+
           <p className="text-sm text-slate-300">{m.description || 'No description available.'}</p>
 
           <div className="flex flex-wrap gap-2 pt-1">

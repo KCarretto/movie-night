@@ -101,7 +101,11 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
   const myCount = movies.filter((m) => m.by === rt.myId).length;
   const canNominate = rt.state?.phase === 'lobby' && myCount < MAX_NOMINATIONS;
 
-  const onNominate = (m) => { actions.nominate(m.title, m.id || m.tmdbId); emit(); };
+  const onNominate = (m) => {
+    actions.nominate(m.title, m.id || m.tmdbId);
+    replaceRecommendation(m.title);
+    emit();
+  };
   const onWatchlist = (m) => {
     if (inWatchlist(m.title)) removeFromWatchlist(m.title);
     else addToWatchlist(m.title);
