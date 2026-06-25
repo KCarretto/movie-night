@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { movieMeta } from '../lib/catalog.js';
 import GenreTags from '../ui/GenreTags.jsx';
 import LanguageBadge from '../ui/LanguageBadge.jsx';
@@ -52,11 +52,14 @@ export default function Vote() {
 
   const sensors = useSensors(useSensor(PointerSensor));
 
+  const movieIdsStr = movies.map((m) => m.id).join(',');
+  const myVoteStr = myVote.join(',');
+
   useEffect(() => {
     const ids = movies.map((m) => m.id);
     const seeded = [...myVote.filter((id) => ids.includes(id)), ...ids.filter((id) => !myVote.includes(id))];
     setRanking(seeded);
-  }, [movies, myVote]);
+  }, [movieIdsStr, myVoteStr]);
 
   const byId = useMemo(() => new Map(movies.map((m) => [m.id, m])), [movies]);
   const votesIn = Object.keys(rt.state?.votes || {}).length;
