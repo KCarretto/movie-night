@@ -331,7 +331,7 @@ export default function App() {
       <Header showHistory={showHistory} onToggleHistory={setShowHistory} onSettingsAction={onSettingsAction} />
 
       <main className="max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-5 space-y-4">
-        {!showHistory && <RoomBar />}
+        {!showHistory && roomPhase === 'lobby' && <RoomBar />}
 
         {loadingText && (
           <Card>
@@ -362,26 +362,14 @@ export default function App() {
             )}
 
             {roomPhase === 'voting' && (
-              <div className="grid xl:grid-cols-[1fr_1.05fr] gap-4">
+              <div className="grid gap-4">
                 <Vote />
-                <Recommendations
-                  onOpenRec={(rec) => setRecDetail(rec)}
-                  onOpenInsights={() => setInsightsOpen(true)}
-                  onOpenTrain={() => setTrainOpen(true)}
-                  onOpenRate={openRate}
-                />
               </div>
             )}
 
             {roomPhase === 'results' && (
-              <div className="grid xl:grid-cols-[1.1fr_1fr] gap-4">
+              <div className="grid gap-4">
                 <Results onRateWinner={openRate} />
-                <Recommendations
-                  onOpenRec={(rec) => setRecDetail(rec)}
-                  onOpenInsights={() => setInsightsOpen(true)}
-                  onOpenTrain={() => setTrainOpen(true)}
-                  onOpenRate={openRate}
-                />
               </div>
             )}
           </>
