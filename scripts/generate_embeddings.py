@@ -196,6 +196,52 @@ def _as_text(value: Any) -> str:
     return str(value).strip()
 
 
+def _get_budget_vibe(budget: float) -> str:
+    if budget <= 0: return ""
+    if budget > 100000000: return "Blockbuster"
+    if budget > 20000000: return "Mid Budget"
+    if budget > 500000: return "Indie"
+    return "Low Budget"
+
+def _get_era(year_val: Any, release_date_val: Any) -> str:
+    if year_val:
+        year_str = str(year_val)
+    elif release_date_val:
+        year_str = str(release_date_val)
+    else:
+        return ""
+
+    try:
+        year = int(year_str[:4])
+        return f"{year // 10 * 10}s"
+    except (ValueError, TypeError):
+        return ""
+
+def _get_runtime_vibe(runtime: float) -> str:
+    if runtime <= 0: return ""
+    if runtime < 60: return "Short Film"
+    if runtime < 90: return "Short Feature"
+    if runtime <= 120: return "Feature Film"
+    if runtime <= 150: return "Long Feature"
+    return "Epic"
+
+def _get_revenue_vibe(revenue: float) -> str:
+    if revenue <= 0: return ""
+    if revenue > 1000000000: return "Billion Dollar Blockbuster"
+    if revenue > 500000000: return "Massive Box Office Hit"
+    if revenue > 100000000: return "Box Office Hit"
+    if revenue > 10000000: return "Commercial Success"
+    return "Modest Box Office"
+
+def _get_vote_vibe(vote_avg: float) -> str:
+    if vote_avg <= 0: return ""
+    if vote_avg >= 8.0: return "Critically Acclaimed"
+    if vote_avg >= 7.0: return "Highly Rated"
+    if vote_avg >= 6.0: return "Well Received"
+    if vote_avg >= 5.0: return "Mixed Reviews"
+    return "Poorly Received"
+
+
 def movie_text(movie: Dict[str, Any]) -> str:
     """Render a movie's fields as a structured natural-language prompt.
 
@@ -212,17 +258,16 @@ def movie_text(movie: Dict[str, Any]) -> str:
 
     fields = (
         ("Title", _as_text(movie.get("title"))),
-        ("Year", _as_text(movie.get("year"))),
+        ("Era", _get_era(movie.get("year"), movie.get("release_date"))),
         ("Director", _as_text(movie.get("director"))),
         ("Cast", _as_text(movie.get("cast"))),
         ("Genres", _as_text(movie.get("genres")) or _as_text(movie.get("primaryGenre"))),
         ("Overview", _as_text(movie.get("description"))),
-        ("Release Date", _as_text(movie.get("release_date"))),
-        ("Runtime", f"{runtime_val} minutes" if runtime_val > 0 else ""),
-        ("Budget", f"${budget_val:,}" if budget_val > 0 else ""),
-        ("Revenue", f"${revenue_val:,}" if revenue_val > 0 else ""),
+        ("Runtime", _get_runtime_vibe(runtime_val)),
+        ("Budget", _get_budget_vibe(budget_val)),
+        ("Revenue", _get_revenue_vibe(revenue_val)),
         ("Origin Country", _as_text(movie.get("origin_country"))),
-        ("Vote Average", str(vote_avg_val) if vote_avg_val > 0.0 else ""),
+        ("Reception", _get_vote_vibe(vote_avg_val)),
         ("Status", _as_text(movie.get("status"))),
         ("Keywords", _as_text(movie.get("keywords"))),
     )
