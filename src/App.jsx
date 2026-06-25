@@ -32,18 +32,31 @@ import { actions, afterTasteChange, boot, shareSeen } from './state/controller.j
 import { useStore } from './state/useStore.js';
 import { startSyncReceive } from './lib/syncpeer.js';
 
-function uniqByTitle(list = []) {
-  const seen = new Set();
-  const out = [];
-  for (const row of list) {
+function unionByTitle(listA = [], listB = []) {
+  const map = new Map();
+  for (const row of [...listA, ...listB]) {
     const title = String(row?.title || '').trim();
     if (!title) continue;
     const key = title.toLowerCase();
-    if (seen.has(key)) continue;
-    seen.add(key);
-    out.push({ ...row, title });
+    const existing = map.get(key);
+    if (!existing) {
+      map.set(key, { ...row, title });
+    } else {
+      const merged = { ...existing, ...row };
+      if (existing.rating !== undefined && row.rating !== undefined) {
+        merged.rating = Math.max(existing.rating, row.rating);
+      }
+      if (existing.interest !== undefined && row.interest !== undefined) {
+        merged.interest = Math.max(existing.interest, row.interest);
+      }
+      // retain earliest addedAt/watchedAt if possible
+      if (existing.watchedAt && row.watchedAt) merged.watchedAt = Math.min(existing.watchedAt, row.watchedAt);
+      if (existing.addedAt && row.addedAt) merged.addedAt = Math.min(existing.addedAt, row.addedAt);
+      if (existing.at && row.at) merged.at = Math.min(existing.at, row.at);
+      map.set(key, merged);
+    }
   }
-  return out;
+  return Array.from(map.values());
 }
 
 function parseCsv(line) {
@@ -192,11 +205,11 @@ export default function App() {
 
   const mergeImportData = (d) => {
     saveHistory([...(loadHistory() || []), ...(Array.isArray(d.history) ? d.history : [])].slice(-300));
-    saveWatched(uniqByTitle([...(loadWatched() || []), ...(Array.isArray(d.watched) ? d.watched : [])]));
-    saveWatchlist(uniqByTitle([...(loadWatchlist() || []), ...(Array.isArray(d.watchlist) ? d.watchlist : [])]));
-    saveInterested(uniqByTitle([...(loadInterested() || []), ...(Array.isArray(d.interested) ? d.interested : [])]));
-    saveNotInterested(uniqByTitle([...(loadNotInterested() || []), ...(Array.isArray(d.notInterested) ? d.notInterested : [])]));
-    saveNotSure(uniqByTitle([...(loadNotSure() || []), ...(Array.isArray(d.notSure) ? d.notSure : [])]));
+    saveWatched(unionByTitle(loadWatched() || [], Array.isArray(d.watched) ? d.watched : []));
+    saveWatchlist(unionByTitle(loadWatchlist() || [], Array.isArray(d.watchlist) ? d.watchlist : []));
+    saveInterested(unionByTitle(loadInterested() || [], Array.isArray(d.interested) ? d.interested : []));
+    saveNotInterested(unionByTitle(loadNotInterested() || [], Array.isArray(d.notInterested) ? d.notInterested : []));
+    saveNotSure(unionByTitle(loadNotSure() || [], Array.isArray(d.notSure) ? d.notSure : []));
     if (d.name) saveName(String(d.name).slice(0, 24));
     markRankingStale();
     shareSeen();

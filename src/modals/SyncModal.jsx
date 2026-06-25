@@ -56,6 +56,10 @@ export default function SyncModal({ open, onClose, buildPayload, onImport }) {
     setShareUrl('');
     startSyncShare({
       buildPayload: () => buildPayloadRef.current?.(),
+      onImport: (payload) => {
+        onClose?.();
+        onImport?.(payload);
+      },
       onReady: (url) => setShareUrl(url),
       onStatus: setStatus,
     });
@@ -116,6 +120,7 @@ export default function SyncModal({ open, onClose, buildPayload, onImport }) {
             setStatus('Connecting\u2026');
             const cleanup = startSyncReceive({
               hostId: id,
+              buildPayload: () => buildPayloadRef.current?.(),
               onStatus: setStatus,
               onData: (payload) => {
                 if (typeof syncCleanupRef.current === 'function') {

@@ -23,7 +23,7 @@ export function destroySyncPeer() {
  * 'sync-request' message, buildPayload() is called and the result is
  * returned as a 'sync-data' message.
  */
-export function startSyncShare({ buildPayload, onReady, onStatus }) {
+export function startSyncShare({ buildPayload, onReady, onStatus, onImport }) {
   destroySyncPeer();
   const id = `sync-${Math.random().toString(36).slice(2, 10)}`;
   _syncPeer = new Peer(id, { debug: 1 });
@@ -35,11 +35,14 @@ export function startSyncShare({ buildPayload, onReady, onStatus }) {
   });
 
   _syncPeer.on('connection', (conn) => {
-    conn.on('open', () => onStatus?.('Sending data\u2026'));
+    conn.on('open', () => onStatus?.('Exchanging data\u2026'));
     conn.on('data', (msg) => {
       if (msg && msg.type === 'sync-request') {
         try { conn.send({ type: 'sync-data', payload: buildPayload() }); } catch (e) {}
-        onStatus?.('Data sent \u2713');
+        if (msg.payload) {
+          onImport?.(msg.payload);
+        }
+        onStatus?.('Data exchanged \u2713');
       }
     });
     conn.on('error', () => {});
@@ -53,7 +56,7 @@ export function startSyncShare({ buildPayload, onReady, onStatus }) {
  * Calls onStatus(text) for progress updates, onData(payload) on success,
  * onError(message) on failure. Returns a cleanup function.
  */
-export function startSyncReceive({ hostId, onStatus, onData, onError }) {
+export function startSyncReceive({ hostId, buildPayload, onStatus, onData, onError }) {
   destroySyncPeer();
   let done = false;
   const fail = (m) => { if (!done) { done = true; onError?.(m); } };
@@ -63,8 +66,8 @@ export function startSyncReceive({ hostId, onStatus, onData, onError }) {
   _syncPeer.on('open', () => {
     const conn = _syncPeer.connect(hostId, { reliable: true });
     conn.on('open', () => {
-      onStatus?.('Receiving data\u2026');
-      try { conn.send({ type: 'sync-request' }); } catch (e) {}
+      onStatus?.('Exchanging data\u2026');
+      try { conn.send({ type: 'sync-request', payload: buildPayload ? buildPayload() : undefined }); } catch (e) {}
     });
     conn.on('data', (msg) => {
       if (msg && msg.type === 'sync-data') {
