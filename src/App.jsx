@@ -352,8 +352,8 @@ export default function App() {
                   <Lobby />
                 </div>
 
-                <div className="grid gap-4 mt-4">
-                  <div className="space-y-4 flex flex-col">
+                <div className="grid gap-4 mt-4 min-w-0">
+                  <div className="space-y-4 flex flex-col min-w-0">
                     <Recommendations
                       onOpenRec={(rec) => setRecDetail(rec)}
                       onOpenInsights={() => setInsightsOpen(true)}
@@ -361,7 +361,7 @@ export default function App() {
                       onOpenRate={openRate}
                     />
                   </div>
-                  <div className="space-y-4 flex flex-col">
+                  <div className="space-y-4 flex flex-col min-w-0">
                     <Nominate onOpenStartVote={() => setStartVoteOpen(true)} />
                   </div>
                 </div>
@@ -369,13 +369,13 @@ export default function App() {
             )}
 
             {roomPhase === 'voting' && (
-              <div className="grid gap-4">
+              <div className="grid gap-4 min-w-0">
                 <Vote />
               </div>
             )}
 
             {roomPhase === 'results' && (
-              <div className="grid gap-4">
+              <div className="grid gap-4 min-w-0">
                 <Results onRateWinner={openRate} />
               </div>
             )}
