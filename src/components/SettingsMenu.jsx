@@ -35,17 +35,44 @@ export default function SettingsMenu({ onAction }) {
       {open && (
         <div className="menu card p-1.5">
           {ITEMS.map(([key, label]) => (
-            <button
-              key={key}
-              type="button"
-              className="w-full text-left px-3 py-2 rounded-md text-sm text-slate-200 hover:bg-panel2"
-              onClick={() => {
-                setOpen(false);
-                onAction?.(key);
-              }}
-            >
-              {label}
-            </button>
+            key === 'importLetterboxd' ? (
+              <div key={key} className="flex items-center group relative whitespace-nowrap">
+                <button
+                  type="button"
+                  className="flex-1 text-left px-3 py-2 rounded-md text-sm text-slate-200 hover:bg-panel2"
+                  onClick={() => {
+                    setOpen(false);
+                    onAction?.(key);
+                  }}
+                >
+                  {label}
+                </button>
+                <button
+                  type="button"
+                  aria-label="Letterboxd import instructions"
+                  className="w-6 h-6 mr-1 rounded-full bg-panel2 border border-line flex items-center justify-center text-[11px] text-slate-300 flex-shrink-0"
+                >
+                  <i className="fa-solid fa-info" />
+                </button>
+                <div className="hidden group-hover:block absolute right-0 top-full pt-1 z-50 w-60 text-xs text-slate-300 leading-snug normal-case whitespace-normal">
+                  <div className="card bg-panel p-3 shadow-xl">
+                    You may export your data from Letterboxd <a href="https://letterboxd.com/settings/data/" target="_blank" rel="noopener noreferrer" className="text-accent2 underline">here</a>, then use this option to import the downloaded 'ratings.csv'.
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <button
+                key={key}
+                type="button"
+                className="w-full text-left px-3 py-2 rounded-md text-sm text-slate-200 hover:bg-panel2"
+                onClick={() => {
+                  setOpen(false);
+                  onAction?.(key);
+                }}
+              >
+                {label}
+              </button>
+            )
           ))}
         </div>
       )}
