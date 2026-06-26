@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { movieMeta } from '../lib/catalog.js';
 import GenreTags from '../ui/GenreTags.jsx';
 import LanguageBadge from '../ui/LanguageBadge.jsx';
+import Poster from '../ui/Poster.jsx';
 import { actions } from '../state/controller.js';
 import { useStore } from '../state/useStore.js';
 import { DndContext, DragOverlay, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
@@ -15,6 +16,7 @@ function SortableItemContent({ movie, meta, index }) {
         <i className="fa-solid fa-grip-vertical" />
       </div>
       <div className="text-xs text-slate-400 mt-1">#{index + 1}</div>
+      <Poster movie={meta || movie} className="w-10 h-14 rounded flex-none" />
       <div className="min-w-0 flex-1">
         <div className="text-sm text-slate-100">{movie.title}</div>
         <div className="mt-1.5 flex flex-wrap gap-1.5 items-center">

@@ -4,6 +4,7 @@ import { movieMeta } from '../lib/catalog.js';
 import GenreTags from '../ui/GenreTags.jsx';
 import LanguageBadge from '../ui/LanguageBadge.jsx';
 import SeenIndicator from '../ui/SeenIndicator.jsx';
+import Poster from '../ui/Poster.jsx';
 import Typeahead from './Typeahead.jsx';
 import { actions } from '../state/controller.js';
 import { useStore } from '../state/useStore.js';
@@ -57,6 +58,7 @@ export default function Nominate({ onOpenStartVote }) {
             <div key={m.id} className="rounded-lg border border-line bg-panel2 p-2.5">
               <div className="flex items-start gap-2">
                 <div className="text-xs text-slate-500 mt-1">#{i + 1}</div>
+                <Poster movie={meta || m} className="w-10 h-14 rounded flex-none" />
                 <div className="min-w-0 flex-1">
                   <div className="font-medium text-slate-100 truncate">{m.title}</div>
                   <div className="text-xs text-slate-400">by {byName.get(m.by) || 'Guest'}</div>

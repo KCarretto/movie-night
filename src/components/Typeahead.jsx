@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { useStore } from '../state/useStore.js';
+import Poster from '../ui/Poster.jsx';
 
 export default function Typeahead({ value, onChange, onPick }) {
   const rt = useStore();
@@ -49,12 +50,15 @@ export default function Typeahead({ value, onChange, onPick }) {
             <button
               key={`${m.id}-${m.title}`}
               type="button"
-              className={`ta-item w-full text-left px-2.5 py-2 rounded-md text-sm ${i === active ? 'active' : ''}`}
+              className={`ta-item flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-md text-sm ${i === active ? 'active' : ''}`}
               onMouseEnter={() => setActive(i)}
               onClick={() => onPick?.(m)}
             >
-              <span className="text-slate-100">{m.title}</span>
-              {m.year ? <span className="text-slate-400"> · {m.year}</span> : null}
+              <Poster movie={m} className="w-8 h-12 rounded flex-none" />
+              <div className="flex-1 min-w-0 truncate">
+                <span className="text-slate-100">{m.title}</span>
+                {m.year ? <span className="text-slate-400"> · {m.year}</span> : null}
+              </div>
             </button>
           ))}
         </div>
