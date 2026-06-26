@@ -347,18 +347,25 @@ export default function App() {
         ) : (
           <>
             {roomPhase === 'lobby' && (
-              <div className="grid xl:grid-cols-[1fr_1.1fr] gap-4">
+              <>
                 <div className="space-y-4">
                   <Lobby />
-                  <Nominate onOpenStartVote={() => setStartVoteOpen(true)} />
                 </div>
-                <Recommendations
-                  onOpenRec={(rec) => setRecDetail(rec)}
-                  onOpenInsights={() => setInsightsOpen(true)}
-                  onOpenTrain={() => setTrainOpen(true)}
-                  onOpenRate={openRate}
-                />
-              </div>
+
+                <div className="grid gap-4 mt-4">
+                  <div className="space-y-4 flex flex-col">
+                    <Recommendations
+                      onOpenRec={(rec) => setRecDetail(rec)}
+                      onOpenInsights={() => setInsightsOpen(true)}
+                      onOpenTrain={() => setTrainOpen(true)}
+                      onOpenRate={openRate}
+                    />
+                  </div>
+                  <div className="space-y-4 flex flex-col">
+                    <Nominate onOpenStartVote={() => setStartVoteOpen(true)} />
+                  </div>
+                </div>
+              </>
             )}
 
             {roomPhase === 'voting' && (
