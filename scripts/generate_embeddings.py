@@ -342,11 +342,11 @@ class GeminiBackend:
 
     # Batch job states that mean the job is finished (no further polling).
     _TERMINAL_STATES = {
-        "JOB_STATE_SUCCEEDED",
-        "JOB_STATE_FAILED",
-        "JOB_STATE_CANCELLED",
-        "JOB_STATE_EXPIRED",
-        "JOB_STATE_PARTIALLY_SUCCEEDED",
+        "SUCCEEDED",
+        "FAILED",
+        "CANCELLED",
+        "EXPIRED",
+        "PARTIALLY_SUCCEEDED",
     }
 
     def __init__(
@@ -367,9 +367,12 @@ class GeminiBackend:
 
     @staticmethod
     def _job_state(job: Any) -> str:
-        """Return the batch job's state name (e.g. ``JOB_STATE_RUNNING``)."""
+        """Return the batch job's state name (e.g. ``RUNNING``)."""
         state = getattr(job, "state", None)
-        return getattr(state, "name", str(state))
+        name = getattr(state, "name", str(state))
+        if name.startswith("JOB_STATE_"):
+            name = name[len("JOB_STATE_"):]
+        return name
 
     def _poll(self, job: Any) -> Any:
         """Block until the batch job reaches a terminal state, showing progress."""
@@ -419,12 +422,16 @@ class GeminiBackend:
                 }
             },
         )
+
+        job_name = getattr(job, "name", "unknown")
         if self._progress is not None:
-            self._progress.tick(suffix=f"batch submitted ({len(texts)} movies)…")
+            self._progress.tick(suffix=f"batch '{job_name}' submitted ({len(texts)} movies)…")
+        else:
+            print(f"Batch '{job_name}' submitted ({len(texts)} movies)...")
 
         job = self._poll(job)
         state = self._job_state(job)
-        if state != "JOB_STATE_SUCCEEDED":
+        if state != "SUCCEEDED":
             error = getattr(job, "error", None)
             raise RuntimeError(
                 f"Gemini embedding batch job ended in state {state}"
@@ -432,7 +439,7 @@ class GeminiBackend:
             )
 
         dest = getattr(job, "dest", None)
-        responses = getattr(dest, "inlined_embed_content_responses", None) or []
+        responses = getattr(dest, "inlined_responses", None) or getattr(dest, "inlined_embed_content_responses", None) or []
         if len(responses) != len(texts):
             raise RuntimeError(
                 f"Gemini batch returned {len(responses)} responses for {len(texts)} inputs."
@@ -444,6 +451,10 @@ class GeminiBackend:
             if getattr(item, "error", None):
                 raise RuntimeError(f"Gemini batch item {i} failed: {item.error}")
             embedding = getattr(getattr(item, "response", None), "embedding", None)
+            if embedding is None and hasattr(item, "embeddings"):
+                embeddings = getattr(item, "embeddings", None)
+                if embeddings and len(embeddings) > 0:
+                    embedding = embeddings[0]
             values = getattr(embedding, "values", None)
             if values is None:
                 raise RuntimeError(f"Gemini batch item {i} returned no embedding.")
