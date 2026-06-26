@@ -33,7 +33,7 @@ export default function TrainModal({ open, onClose, onRate }) {
       ) : (
         <div className="space-y-3">
           <div className="flex gap-3">
-            <Poster movie={movie} className="w-24 h-36 rounded-lg overflow-hidden" />
+            <Poster movie={movie} className="w-24 shrink-0 h-36 rounded-lg overflow-hidden" />
             <div>
               <div className="text-white font-medium">{movie.title}</div>
               <div className="text-xs text-slate-400">{movie.year || '—'} · {movie.primaryGenre || '—'}</div>
@@ -47,7 +47,7 @@ export default function TrainModal({ open, onClose, onRate }) {
             <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={() => { markNotSure(movie.title); tasteTouch(); bump(); }}>Not sure</button>
           </div>
           <div className="grid grid-cols-2 gap-2 pt-1 border-t border-line/50">
-            <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={() => onRate?.(movie.title)}>I’ve seen this</button>
+            <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={() => { onRate?.(movie.title); bump(); }}>I’ve seen this</button>
             <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={bump}>Skip</button>
           </div>
         </div>
