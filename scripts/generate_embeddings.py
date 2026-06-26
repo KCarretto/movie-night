@@ -373,10 +373,28 @@ class GeminiBackend:
 
     def _poll(self, job: Any) -> Any:
         """Block until the batch job reaches a terminal state, showing progress."""
+        start_time = time.time()
+        last_state = self._job_state(job)
+
         while self._job_state(job) not in self._TERMINAL_STATES:
-            if self._progress is not None:
-                self._progress.tick(suffix=f"batch {self._job_state(job)}…")
-            time.sleep(self.POLL_INTERVAL_SECONDS)
+            current_state = self._job_state(job)
+            if current_state != last_state:
+                start_time = time.time()
+                last_state = current_state
+
+            for remaining in range(self.POLL_INTERVAL_SECONDS, 0, -1):
+                if self._progress is not None:
+                    suffix = f"batch {current_state}"
+                    elapsed = time.time() - start_time
+                    if elapsed > 600:
+                        suffix += " (warning: stuck for over 10m)"
+
+                    if getattr(self._progress, "_tty", False):
+                        suffix += f" (polling in {remaining}s)…"
+                    else:
+                        suffix += "…"
+                    self._progress.tick(suffix=suffix)
+                time.sleep(1)
             job = self._client.batches.get(name=job.name)
         return job
 
