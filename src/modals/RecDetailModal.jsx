@@ -3,6 +3,7 @@ import Poster from '../ui/Poster.jsx';
 import GenreTags from '../ui/GenreTags.jsx';
 import LanguageBadge from '../ui/LanguageBadge.jsx';
 import RatingsLine from '../ui/RatingsLine.jsx';
+import StarRating from '../ui/StarRating.jsx';
 import { actions, afterTasteChange, shareSeen } from '../state/controller.js';
 import {
   addToWatchlist, inWatchlist, loadInterested, loadNotInterested,
@@ -57,21 +58,21 @@ export default function RecDetailModal({ open, rec, onClose, onRate }) {
             </button>
           </div>
 
-          <div className="flex flex-wrap gap-2">
-            {[1, 2, 3, 4, 5].map((n) => (
-              <button
-                key={n}
-                type="button"
-                className={`text-xs px-2 py-1 rounded-full border ${interested?.interest === n ? 'border-accent2 text-white' : 'border-line text-slate-300'}`}
-                onClick={() => { upsertInterested(m.title, n); tasteTouch(); }}
-              >
-                Interest {n}
-              </button>
-            ))}
+          <div className="flex flex-wrap items-center gap-2">
+            <StarRating
+              value={interested?.interest || 0}
+              onChange={(n) => {
+                if (n > 0) {
+                  upsertInterested(m.title, n);
+                  tasteTouch();
+                  onClose();
+                }
+              }}
+            />
             <button
               type="button"
-              className={`text-xs px-2 py-1 rounded-full border ${skipped ? 'border-rose-400 text-rose-300' : 'border-line text-slate-300'}`}
-              onClick={() => { markNotInterested(m.title); tasteTouch(); }}
+              className={`text-xs px-2 py-1 rounded-full border ml-2 ${skipped ? 'border-rose-400 text-rose-300' : 'border-line text-slate-300'}`}
+              onClick={() => { markNotInterested(m.title); tasteTouch(); onClose(); }}
             >
               Not interested
             </button>

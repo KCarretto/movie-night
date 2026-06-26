@@ -23,6 +23,7 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
   const trackRef = useRef(null);
   const appendRaf = useRef(0);
   const [embeddingsTimedOut, setEmbeddingsTimedOut] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   // Hold on the skeleton shimmer until embeddings land (or we give up waiting)
   // so the first picks the viewer sees are embedding-powered, not popularity
@@ -69,7 +70,14 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
   const setGenres = (next) => { rt.activeSelectedGenres = next; applyFilterChange(); };
   const setLanguages = (next) => { rt.activeSelectedLanguages = next; applyFilterChange(); };
 
-  const forceRefresh = () => { getRecommendations({ forceRefresh: true }); emit(); };
+  const forceRefresh = () => {
+    setIsRefreshing(true);
+    setTimeout(() => {
+      getRecommendations({ forceRefresh: true });
+      emit();
+      setIsRefreshing(false);
+    }, 300);
+  };
 
   // Infinite scroll: when the carousel nears its right edge, append the next
   // batch of recommendations so it keeps loading more as the user scrolls.
@@ -116,7 +124,7 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
   const onNotInterested = (m) => { markNotInterested(m.title); replaceRecommendation(m.title); afterTasteChange(); };
   const onWatched = (m) => onOpenRate?.(m.title);
 
-  const shimmer = embeddingsPending;
+  const shimmer = embeddingsPending || isRefreshing;
 
   return (
     <section className="card p-4 sm:p-5 min-w-0">
