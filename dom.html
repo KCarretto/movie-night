@@ -1,0 +1,40 @@
+<html lang="en"><head>
+  <script type="module">import { injectIntoGlobalHook } from "/@react-refresh"
+injectIntoGlobalHook(window);
+window.$RefreshReg$ = () => {};
+window.$RefreshSig$ = () => (type) => type;</script>
+
+  <script type="module" src="/@vite/client"></script>
+
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Plot Polls</title>
+  <!-- Movie-reel favicon (inline SVG so it stays self-contained, no extra file). -->
+  <link rel="icon" href="data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2064%2064'%3E%3Crect%20width='64'%20height='64'%20rx='12'%20fill='%230b0d12'/%3E%3Ccircle%20cx='32'%20cy='32'%20r='20'%20fill='none'%20stroke='%23ffce4d'%20stroke-width='4'/%3E%3Ccircle%20cx='32'%20cy='32'%20r='5'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='32'%20cy='15'%20r='4'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='32'%20cy='49'%20r='4'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='15'%20cy='32'%20r='4'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='49'%20cy='32'%20r='4'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='20'%20cy='20'%20r='4'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='44'%20cy='20'%20r='4'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='20'%20cy='44'%20r='4'%20fill='%23ffce4d'/%3E%3Ccircle%20cx='44'%20cy='44'%20r='4'%20fill='%23ffce4d'/%3E%3C/svg%3E">
+
+  <!-- ===== External presentation dependencies (via CDN) ===== -->
+  <!-- Tailwind CSS for fast, clean, responsive styling -->
+  <!-- qrcode.js: generates the room-join QR code (host only) -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <!-- html5-qrcode: in-app camera QR scanner (fallback join method) -->
+  <script src="https://unpkg.com/html5-qrcode"></script>
+  <!-- Font Awesome: button & action icons (trash, gear, dice, etc.) -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css">
+
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&amp;family=Inter:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+
+</head>
+
+<body class="text-slate-200 min-h-full">
+  <!-- Dynamic backdrop: a blurred collage of the nominated movies' poster art. -->
+  <div id="bgArt" aria-hidden="true"></div>
+
+  <!-- React mounts the whole application here. -->
+  <div id="root"></div>
+
+  <script type="module" src="/src/main.jsx"></script>
+
+
+<vite-error-overlay></vite-error-overlay></body></html>

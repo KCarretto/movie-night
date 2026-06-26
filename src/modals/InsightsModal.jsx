@@ -283,7 +283,7 @@ export default function InsightsModal({ open, onClose }) {
       list.forEach((v) => { if (isVector(v)) { memberPoints.push({ emb: Array.from(v), kind: 'member' }); added += 1; } });
       if (added) peerCount += 1;
     });
-    const group = (peerCount > 0 && groupCentroids.length)
+    const group = (groupCentroids.length)
       ? buildClusterMap(groupCentroids, memberPoints.concat(recs), 'group')
       : null;
 

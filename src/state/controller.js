@@ -413,10 +413,10 @@ function applyAction(action, fromId) {
       if (!state.peerVectors) state.peerVectors = {};
       let v = action.vector;
       if (Array.isArray(v) && v.length && typeof v[0] === 'number') v = [v];
-      const isFloatVec = (vec) => Array.isArray(vec) && vec.length > 0 && vec.length <= 2048
-          && vec.every((n) => typeof n === 'number' && isFinite(n));
+      const isFloatVec = (vec) => (Array.isArray(vec) || ArrayBuffer.isView(vec)) && vec.length > 0 && vec.length <= 2048
+          && Array.from(vec).every((n) => typeof n === 'number' && isFinite(n));
       if (Array.isArray(v) && v.length > 0 && v.length <= 16 && v.every(isFloatVec)) {
-        state.peerVectors[fromId] = v.map((vec) => vec.map((n) => Number(n)));
+        state.peerVectors[fromId] = v.map((vec) => Array.from(vec).map((n) => Number(n)));
       } else {
         delete state.peerVectors[fromId];
       }
