@@ -321,7 +321,10 @@ let recCache = { sig: null, list: [], personalised: false, totalAvailable: 0 };
 let recPrecompute = { sig: null, ranked: null, batches: [] };
 let recRankingStale = false;
 
-export function markRankingStale() { recRankingStale = true; }
+export function markRankingStale() {
+  recRankingStale = true;
+  _myCentroids = null;
+}
 export function getRecCache() { return recCache; }
 
 function recSignature() {

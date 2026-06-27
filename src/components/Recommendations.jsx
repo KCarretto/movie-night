@@ -67,8 +67,6 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
 
     return () => clearTimeout(t);
   }, [
-    depMovies,
-    depVectors,
     depGenres,
     depLanguages,
     embeddingsPending,

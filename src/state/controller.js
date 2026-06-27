@@ -107,15 +107,19 @@ export function shareVector() {
   dispatch({ type: 'setVector', vector: myTasteVector() });
 }
 export function shareSeen() {
-  dispatch({ type: 'setSeen', seen: mySeenShare() });
-  shareVector();
-  emit();
+  setTimeout(() => {
+    dispatch({ type: 'setSeen', seen: mySeenShare() });
+    shareVector();
+    emit();
+  }, 0);
 }
 // Re-share taste + re-render after any taste-shaping change (rating, watchlist,
 // training). Recommendations re-rank on the next render via recSignature().
 export function afterTasteChange() {
-  shareVector();
-  emit();
+  setTimeout(() => {
+    shareVector();
+    emit();
+  }, 0);
 }
 
 // ======================================================================
