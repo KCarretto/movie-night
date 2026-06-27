@@ -141,7 +141,8 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
   const onNominate = (m) => {
     actions.nominate(m.title, m.id || m.tmdbId);
     addRecentlyNominated(m.title);
-    replaceRecommendation(m.title);
+    const updated = replaceRecommendation(m.title);
+    setRecs({ list: updated.list, personalised: updated.personalised, totalAvailable: updated.totalAvailable });
     emit();
   };
   const onWatchlist = (m) => {
@@ -151,7 +152,12 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
   };
   // Dismissing a card swaps in just the next recommendation rather than
   // rebuilding the whole carousel, so the other cards stay put.
-  const onNotInterested = (m) => { markNotInterested(m.title); replaceRecommendation(m.title); afterTasteChange(); };
+  const onNotInterested = (m) => {
+    markNotInterested(m.title);
+    const updated = replaceRecommendation(m.title);
+    setRecs({ list: updated.list, personalised: updated.personalised, totalAvailable: updated.totalAvailable });
+    afterTasteChange();
+  };
   const onWatched = (m) => onOpenRate?.(m.title);
 
   const shimmer = embeddingsPending || isRefreshing || isCalculating;
