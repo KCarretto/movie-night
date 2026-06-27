@@ -107,9 +107,7 @@ function updateBackground(state) {
   }
 
   el.classList.remove('winner');
-  const layers = arts
-    .map((u, i) => `linear-gradient(180deg, rgba(11,13,18,.52), rgba(11,13,18,.75)), url('${u}') ${(i * 17) % 100}% 0 / ${Math.max(16, 26 - i * 2)}% auto repeat-y`)
-    .join(', ');
+  const layers = Array.from({ length: 9 }).map((_, i) => { const u = arts[i % arts.length]; return `linear-gradient(180deg, rgba(11,13,18,.52), rgba(11,13,18,.75)), url('${u}') ${i * (100 / 8)}% 0 / 12% auto repeat-y`; }).join(', ');
   el.style.background = layers;
   el.classList.add('show');
 }

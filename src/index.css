@@ -167,10 +167,10 @@
        single, even-less-blurred cover image. */
     #bgArt { position: fixed; inset: 0; z-index: -1; pointer-events: none;
       background-position: center; background-repeat: repeat-y;
-      filter: blur(12px) saturate(1.15) brightness(.45); transform: scale(1.06);
+      filter: blur(6px) saturate(1.15) brightness(.45); transform: scale(1.06);
       opacity: 0; transition: opacity .8s ease; }
     #bgArt.winner { background-repeat: no-repeat; background-size: cover;
-      filter: blur(7px) saturate(1.15) brightness(.5); }
+      filter: saturate(1.15) brightness(.5); }
     #bgArt.show { opacity: 1; }
 
     /* Sync share QR code. qrcode.js renders a fixed-pixel <canvas>/<img>; we
