@@ -160,7 +160,13 @@ function startGuest() {
   runtime.myName = 'Connecting…';
   emit();
 
-  peer = new Peer(`peer-${Math.random().toString(36).slice(2, 10)}`, { debug: 1 });
+  let peerId = sessionStorage.getItem('movieNightGuestId');
+  if (!peerId) {
+    peerId = `peer-${Math.random().toString(36).slice(2, 10)}`;
+    sessionStorage.setItem('movieNightGuestId', peerId);
+  }
+
+  peer = new Peer(peerId, { debug: 1 });
 
   peer.on('open', (id) => {
     runtime.myId = id;
@@ -200,6 +206,9 @@ function setupConnection(conn, onOpen) {
   conn.on('close', () => {
     if (connections.get(conn.peer) === conn) connections.delete(conn.peer);
     if (runtime.isHost) removePeer(conn.peer);
+    else if (conn.peer === `room-${runtime.roomId}-host`) {
+      setTimeout(() => { if (connections.size === 0) connectToHost(); }, 2000);
+    }
     updateNetCount();
   });
 
@@ -268,6 +277,7 @@ function hostAddPeer(peerId, requestedName) {
 
 function removePeer(peerId) {
   const state = S();
+  if (state.phase !== 'lobby') return; // Don't remove peers once voting starts so they can reconnect
   const before = state.peers.length;
   state.peers = state.peers.filter((p) => p.id !== peerId);
   delete state.votes[peerId];
@@ -367,6 +377,13 @@ function applyAction(action, fromId) {
       state.votes = {};
       break;
     }
+    case 'cancelVoting': {
+      if (fromId !== runtime.myId) return;
+      if (state.phase !== 'voting') return;
+      state.phase = 'lobby';
+      state.votes = {};
+      break;
+    }
     case 'vote': {
       if (state.phase !== 'voting') return;
       const valid = Array.isArray(action.ranking) ? action.ranking
@@ -450,6 +467,7 @@ export const actions = {
   startVoting: () => dispatch({ type: 'startVoting' }),
   vote: (ranking) => dispatch({ type: 'vote', ranking }),
   closeVoting: () => dispatch({ type: 'closeVoting' }),
+  cancelVoting: () => dispatch({ type: 'cancelVoting' }),
   reset: () => dispatch({ type: 'reset' }),
   setName: (name) => dispatch({ type: 'setName', name }),
 };

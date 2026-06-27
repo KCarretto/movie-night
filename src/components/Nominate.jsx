@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { MAX_NOMINATIONS } from '../lib/constants.js';
 import { movieMeta } from '../lib/catalog.js';
+import { addRecentlyNominated } from '../lib/storage.js';
 import GenreTags from '../ui/GenreTags.jsx';
 import LanguageBadge from '../ui/LanguageBadge.jsx';
 import SeenIndicator from '../ui/SeenIndicator.jsx';
@@ -22,6 +23,7 @@ export default function Nominate({ onOpenStartVote }) {
   const nominate = (m) => {
     if (!m?.title || !canNominate) return;
     actions.nominate(m.title, m.id || m.tmdb_id);
+    addRecentlyNominated(m.title);
     setQuery('');
   };
 
@@ -31,6 +33,7 @@ export default function Nominate({ onOpenStartVote }) {
     if (!text || !canNominate) return;
     const mm = movieMeta(text);
     actions.nominate(text, mm?.id || mm?.tmdb_id);
+    addRecentlyNominated(text);
     setQuery('');
   };
 
