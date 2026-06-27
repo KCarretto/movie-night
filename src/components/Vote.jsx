@@ -6,7 +6,7 @@ import Poster from '../ui/Poster.jsx';
 import { actions } from '../state/controller.js';
 import { useStore } from '../state/useStore.js';
 import { saveMyVoteOrder, loadMyVoteOrder } from '../lib/storage.js';
-import { DndContext, DragOverlay, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { DndContext, DragOverlay, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
@@ -70,7 +70,19 @@ export default function Vote({ onOpenInfo }) {
   const [ranking, setRanking] = useState([]);
   const [activeId, setActiveId] = useState(null);
 
-  const sensors = useSensors(useSensor(PointerSensor));
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        distance: 8,
+      },
+    }),
+    useSensor(TouchSensor, {
+      activationConstraint: {
+        delay: 200,
+        tolerance: 6,
+      },
+    })
+  );
 
   const movieIdsStr = movies.map((m) => m.id).join(',');
   const myVoteStr = myVote.join(',');
@@ -217,7 +229,7 @@ export default function Vote({ onOpenInfo }) {
         )}
       </div>
 
-      <form onSubmit={submit} className="space-y-2.5">
+      <form onSubmit={submit} className="space-y-2.5 px-2.5 sm:px-4">
         <DndContext
           sensors={sensors}
           collisionDetection={closestCenter}

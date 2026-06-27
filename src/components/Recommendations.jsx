@@ -8,6 +8,7 @@ import {
 } from '../lib/recengine.js';
 import {
   inWatchlist, addToWatchlist, removeFromWatchlist, markNotInterested,
+  addRecentlyNominated,
 } from '../lib/storage.js';
 import { actions, afterTasteChange } from '../state/controller.js';
 import { useStore } from '../state/useStore.js';
@@ -111,6 +112,7 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
 
   const onNominate = (m) => {
     actions.nominate(m.title, m.id || m.tmdbId);
+    addRecentlyNominated(m.title);
     replaceRecommendation(m.title);
     emit();
   };

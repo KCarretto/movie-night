@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { loadRecentlyNominated } from '../lib/storage.js';
+import { loadRecentlyNominated, addRecentlyNominated } from '../lib/storage.js';
 import { movieMeta } from '../lib/catalog.js';
 import Poster from '../ui/Poster.jsx';
 import GenreTags from '../ui/GenreTags.jsx';
@@ -44,7 +44,7 @@ export default function RecentlyNominated({ onOpenInfo }) {
                     onClick={(e) => {
                       e.stopPropagation();
                       actions.nominate(meta.title, meta.id || meta.tmdb_id);
-                      import('../lib/storage.js').then(m => m.addRecentlyNominated(meta.title));
+                      addRecentlyNominated(meta.title);
                     }}
                     title="Nominate again"
                   >

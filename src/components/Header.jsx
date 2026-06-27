@@ -1,13 +1,25 @@
 import { useStore } from '../state/useStore.js';
 import NetStatus from './NetStatus.jsx';
 import SettingsMenu from './SettingsMenu.jsx';
+import { actions } from '../state/controller.js';
 
 export default function Header({ showHistory, onToggleHistory, onSettingsAction }) {
   const rt = useStore();
+
+  const handleTitleClick = () => {
+    if (rt.isHost && rt.roomId) {
+      if (window.confirm("Reset this room back to the nomination phase? This will clear all votes and results.")) {
+        actions.reset();
+      }
+    } else {
+      window.location.href = '/';
+    }
+  };
+
   return (
     <header className="sticky top-0 z-30 border-b border-line/80 bg-ink/75 backdrop-blur">
       <div className="max-w-6xl mx-auto px-3 sm:px-4 py-3 flex items-center gap-3">
-        <button type="button" className="flex items-center gap-2 min-w-0" onClick={() => window.location.href = '/'}>
+        <button type="button" className="flex items-center gap-2 min-w-0" onClick={handleTitleClick}>
           <span className="w-9 h-9 rounded-lg bg-gradient-to-br from-accent to-accent2 flex items-center justify-center text-white">
             <i className="fa-solid fa-film" aria-hidden="true" />
           </span>

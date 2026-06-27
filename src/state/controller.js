@@ -81,7 +81,9 @@ function handlePeerError(err) {
   } else if (t === 'unavailable-id') {
     if (runtime.isHost) {
       setStatus('warn', 'Reclaiming room…');
-      setTimeout(() => { if (connections.size === 0) startHost(); }, 2000);
+      try { if (peer) peer.destroy(); } catch (e) {}
+      peer = null;
+      setTimeout(() => { if (!peer) startHost(); }, 3000);
     } else {
       setStatus('err', 'Room id already hosting elsewhere');
     }
