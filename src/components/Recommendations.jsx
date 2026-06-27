@@ -8,7 +8,7 @@ import {
 } from '../lib/recengine.js';
 import {
   inWatchlist, addToWatchlist, removeFromWatchlist, markNotInterested,
-  addRecentlyNominated,
+  addRecentlyNominated, findWatched,
 } from '../lib/storage.js';
 import { actions, afterTasteChange } from '../state/controller.js';
 import { useStore } from '../state/useStore.js';
@@ -230,6 +230,7 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
               onNotInterested={onNotInterested}
               canNominate={canNominate}
               onWatchlistState={inWatchlist(rec.movie.title)}
+              onWatchedState={!!findWatched(rec.movie.title)}
             />
           ))}
 

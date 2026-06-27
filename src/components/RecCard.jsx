@@ -5,7 +5,7 @@ import SeenIndicator from '../ui/SeenIndicator.jsx';
 
 export default function RecCard({
   rec, onOpen, onNominate, onWatchlist, onWatched, onNotInterested,
-  canNominate = false, onWatchlistState = false,
+  canNominate = false, onWatchlistState = false, onWatchedState = false,
 }) {
   const m = rec.movie;
   // Stop a button click from also bubbling to the card's "open detail" handler.
@@ -24,6 +24,7 @@ export default function RecCard({
         <Poster movie={m} className="rec-poster" />
         {rec.isNew && <span className="rec-badge">NEW</span>}
         {rec.fromWatchlist && <span className="rec-badge" style={{ left: 'auto', right: 8, background: 'rgba(255,61,110,.92)' }}>WL</span>}
+        {onWatchedState && <span className="rec-badge" style={{ left: 8, background: 'rgba(16,185,129,.92)' }}><i className="fa-solid fa-circle-check mr-0.5" />WD</span>}
       </div>
       <div className="p-2 flex flex-col gap-1 flex-1">
         <div className="rec-title text-xs font-medium leading-snug text-slate-100" title={m.title}>
@@ -56,10 +57,11 @@ export default function RecCard({
           <div className="flex gap-1">
             <button
               type="button"
-              className="rec-watched btn flex-1 text-[10px] leading-tight font-semibold py-1.5 px-1 rounded-lg bg-panel2 border border-line text-slate-300"
+              className={`rec-watched btn flex-1 text-[10px] leading-tight font-semibold py-1.5 px-1 rounded-lg bg-panel2 border ${onWatchedState ? 'border-emerald-500/40 text-emerald-300' : 'border-line text-slate-300'}`}
               onClick={guard(() => onWatched?.(m))}
             >
-              <i className="fa-regular fa-circle-check mr-0.5" />Watched
+              <i className={`${onWatchedState ? 'fa-solid text-emerald-400' : 'fa-regular'} fa-circle-check mr-0.5`} />
+              Watched
             </button>
             <button
               type="button"
