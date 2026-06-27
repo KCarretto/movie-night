@@ -13,7 +13,8 @@ import {
 } from '../lib/constants.js';
 import { runtime, emit } from '../lib/runtime.js';
 import {
-  loadSavedName, rememberHostRoom, recallHostRoom, mySeenShare, saveHostSession, loadHostSession
+  loadSavedName, rememberHostRoom, recallHostRoom, mySeenShare, saveHostSession, loadHostSession,
+  cleanExpiredSessions
 } from '../lib/storage.js';
 import { loadMovieDb, movieMeta } from '../lib/catalog.js';
 import { computeMyCentroids } from '../lib/recengine.js';
@@ -133,6 +134,8 @@ export function afterTasteChange() {
 export function boot() {
   if (booted) return;
   booted = true;
+
+  cleanExpiredSessions();
 
   const params = new URLSearchParams(location.search);
   const urlRoom = params.get('room');
@@ -578,6 +581,10 @@ function handleMessage(conn, msg) {
         lastHostActive = Date.now();
       }
       break;
+    case 'room-deleted':
+      if (runtime.isHost) return;
+      handleRoomDeleted();
+      break;
   }
 }
 
@@ -809,6 +816,105 @@ function finishVoting() {
   emit();
 }
 
+export function deleteRoom() {
+  if (!runtime.isHost) return;
+
+  // 1. Broadcast deletion message to all connected peers
+  broadcast({ type: 'room-deleted' });
+
+  // 2. Shut down host networking
+  stopHostHeartbeatCheck();
+  
+  connections.forEach((conn) => {
+    try { conn.close(); } catch (e) {}
+  });
+  connections.clear();
+  updateNetCount();
+
+  if (peer) {
+    try { peer.destroy(); } catch (e) {}
+    peer = null;
+  }
+
+  // 3. Clear session storage keys
+  const rId = runtime.roomId;
+  localStorage.removeItem(HOST_ROOM_KEY);
+  localStorage.removeItem(HOST_SESSION_KEY);
+  if (rId) {
+    localStorage.removeItem(`movieNightNominations_${rId}`);
+    localStorage.removeItem(`movieNightVotes_${rId}`);
+  }
+
+  // 4. Clean up URL params
+  const url = `${location.origin}${location.pathname}`;
+  history.pushState(null, '', url);
+
+  // 5. Reset local runtime state
+  runtime.roomId = null;
+  runtime.isHost = false;
+  runtime.myName = '';
+  runtime.state = {
+    phase: 'lobby',
+    peers: [],
+    movies: [],
+    ballots: {},
+    results: null
+  };
+
+  setStatus('warn', 'Starting…');
+  emit();
+}
+
+function handleRoomDeleted() {
+  const rId = runtime.roomId;
+  
+  // 1. Purge room-specific keys
+  if (rId) {
+    localStorage.removeItem(`movieNightNominations_${rId}`);
+    localStorage.removeItem(`movieNightVotes_${rId}`);
+  }
+  
+  const hostRoom = recallHostRoom();
+  if (hostRoom === rId) {
+    localStorage.removeItem(HOST_ROOM_KEY);
+  }
+
+  // 2. Close networking
+  stopGuestHeartbeat();
+  stopGuestReconnection();
+  
+  connections.forEach((conn) => {
+    try { conn.close(); } catch (e) {}
+  });
+  connections.clear();
+  updateNetCount();
+
+  if (peer) {
+    try { peer.destroy(); } catch (e) {}
+    peer = null;
+  }
+
+  // 3. Reset URL
+  const url = `${location.origin}${location.pathname}`;
+  history.pushState(null, '', url);
+
+  // 4. Reset state
+  runtime.roomId = null;
+  runtime.isHost = false;
+  runtime.myName = '';
+  runtime.state = {
+    phase: 'lobby',
+    peers: [],
+    movies: [],
+    ballots: {},
+    results: null
+  };
+
+  setStatus('warn', 'Starting…');
+  alert('The host has deleted this room. You have been returned to the landing screen.');
+  emit();
+}
+
 // ---- convenience action wrappers used by the UI ----------------------------
 export const actions = {
   nominate: (title, tmdbId) => dispatch({ type: 'nominate', title, tmdbId }),
@@ -821,6 +927,7 @@ export const actions = {
   setName: (name) => dispatch({ type: 'setName', name }),
   startHostingRoom,
   joinRoom,
+  deleteRoom,
 };
 
 export function shareUrl() {

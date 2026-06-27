@@ -378,6 +378,12 @@ export default function App() {
       }
       return;
     }
+    if (action === 'deleteRoom') {
+      if (window.confirm("Are you sure you want to delete this room? This will disconnect all peers, remove room data, and close the room permanently.")) {
+        actions.deleteRoom();
+      }
+      return;
+    }
   };
 
   const loadingText = useMemo(() => {
@@ -438,10 +444,10 @@ export default function App() {
                   <div className="grid md:grid-cols-2 gap-4 min-w-0">
                     <div className="space-y-4 flex flex-col min-w-0">
                       <Nominate onOpenStartVote={() => setStartVoteOpen(true)} />
-                      <MyNominations onOpenInfo={(rec) => setRecDetail({ movie: rec })} />
                     </div>
                     <div className="space-y-4 flex flex-col min-w-0">
                       <RecentlyNominated onOpenInfo={(rec) => setRecDetail({ movie: rec })} />
+                      <MyNominations onOpenInfo={(rec) => setRecDetail({ movie: rec })} />
                     </div>
                   </div>
                 </div>

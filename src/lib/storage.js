@@ -231,3 +231,47 @@ export function loadMyVoteOrder(roomId) {
   }
 }
 
+export function cleanExpiredSessions() {
+  try {
+    const keysToRemove = [];
+    const now = Date.now();
+    const expiryMs = 24 * 60 * 60 * 1000; // 24 hours
+
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+
+      if (key === HOST_SESSION_KEY) {
+        try {
+          const raw = localStorage.getItem(key);
+          const data = JSON.parse(raw);
+          if (data && now - data.timestamp > expiryMs) {
+            keysToRemove.push(HOST_SESSION_KEY);
+            keysToRemove.push(HOST_ROOM_KEY);
+          }
+        } catch (e) {
+          keysToRemove.push(key);
+        }
+      } else if (key.startsWith('movieNightNominations_') || key.startsWith('movieNightVotes_')) {
+        try {
+          const raw = localStorage.getItem(key);
+          const data = JSON.parse(raw);
+          if (data && now - data.timestamp > expiryMs) {
+            keysToRemove.push(key);
+          }
+        } catch (e) {
+          keysToRemove.push(key);
+        }
+      }
+    }
+
+    keysToRemove.forEach((key) => {
+      localStorage.removeItem(key);
+    });
+    
+    console.log(`[STORAGE] Cleaned up ${keysToRemove.length} expired session/room keys.`);
+  } catch (e) {
+    console.warn('[STORAGE] Failed to clean up expired sessions:', e);
+  }
+}
+

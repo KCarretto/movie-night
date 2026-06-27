@@ -1,26 +1,116 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { actions } from '../state/controller.js';
 
 export default function JoinOrHost() {
   const [roomIdInput, setRoomIdInput] = useState('');
   const [error, setError] = useState('');
+  const [isScanning, setIsScanning] = useState(false);
+  const [scanError, setScanError] = useState('');
+  const qrScannerRef = useRef(null);
+
+  // Load the QR scanning library dynamically from unpkg CDN
+  useEffect(() => {
+    if (window.Html5Qrcode) return;
+    const script = document.createElement('script');
+    script.src = 'https://unpkg.com/html5-qrcode';
+    script.async = true;
+    document.body.appendChild(script);
+  }, []);
+
+  // Guarantee the camera is stopped when the component is unmounted
+  useEffect(() => {
+    return () => {
+      if (qrScannerRef.current) {
+        try { qrScannerRef.current.stop(); } catch (e) {}
+      }
+    };
+  }, []);
 
   const handleHost = () => {
     actions.startHostingRoom();
   };
 
   const handleJoin = (e) => {
-    e.preventDefault();
+    e?.preventDefault();
     const cleaned = String(roomIdInput || '').trim();
     if (!cleaned) {
       setError('Please enter a room code');
       return;
     }
     let finalId = cleaned.toLowerCase();
-    if (!finalId.startsWith('room-')) {
-      finalId = `room-${finalId}`;
+    if (finalId.startsWith('room-')) {
+      finalId = finalId.slice(5);
     }
     actions.joinRoom(finalId);
+  };
+
+  const startScanner = () => {
+    if (!window.Html5Qrcode) {
+      setError('Scanner library is loading, please try again.');
+      return;
+    }
+    setIsScanning(true);
+    setScanError('');
+
+    setTimeout(() => {
+      const html5QrCode = new window.Html5Qrcode("reader");
+      qrScannerRef.current = html5QrCode;
+
+      html5QrCode.start(
+        { facingMode: "environment" },
+        {
+          fps: 10,
+          qrbox: { width: 250, height: 250 }
+        },
+        (decodedText) => {
+          let roomId = decodedText;
+          try {
+            const url = new URL(decodedText);
+            const roomParam = url.searchParams.get('room');
+            if (roomParam) {
+              roomId = roomParam;
+            }
+          } catch (e) {
+            // Raw text fallback
+          }
+
+          const cleaned = String(roomId || '').trim();
+          let finalId = cleaned.toLowerCase();
+          if (finalId.startsWith('room-')) {
+            finalId = finalId.slice(5);
+          }
+          setRoomIdInput(finalId);
+          
+          html5QrCode.stop().then(() => {
+            setIsScanning(false);
+            qrScannerRef.current = null;
+          }).catch(() => {
+            setIsScanning(false);
+            qrScannerRef.current = null;
+          });
+        },
+        () => {
+          // ignore scan frame check errors
+        }
+      ).catch((err) => {
+        console.error('Failed to start QR scanner:', err);
+        setScanError('Camera access denied or no camera device found.');
+      });
+    }, 100);
+  };
+
+  const stopScanner = () => {
+    if (qrScannerRef.current) {
+      qrScannerRef.current.stop().then(() => {
+        setIsScanning(false);
+        qrScannerRef.current = null;
+      }).catch(() => {
+        setIsScanning(false);
+        qrScannerRef.current = null;
+      });
+    } else {
+      setIsScanning(false);
+    }
   };
 
   return (
@@ -71,9 +161,17 @@ export default function JoinOrHost() {
                   setRoomIdInput(e.target.value);
                   setError('');
                 }}
-                placeholder="e.g. room-abcd123"
+                placeholder="e.g. epic-popcorn"
                 className="flex-1 bg-panel2 border border-line rounded-xl px-4 py-2.5 text-sm text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-accent focus:ring-1 focus:ring-accent"
               />
+              <button
+                type="button"
+                onClick={isScanning ? stopScanner : startScanner}
+                className={`btn border p-2.5 rounded-xl text-sm transition-colors flex items-center justify-center ${isScanning ? 'bg-rose-500/20 border-rose-500 text-rose-300 animate-pulse' : 'bg-panel2 border-line hover:bg-slate-800 text-slate-200'}`}
+                title="Scan QR Code"
+              >
+                <i className={`fa-solid ${isScanning ? 'fa-xmark' : 'fa-camera'} text-base`} />
+              </button>
               <button
                 type="submit"
                 className="btn bg-panel2 border border-line hover:bg-slate-800 text-slate-200 px-5 py-2.5 rounded-xl text-sm font-medium transition-colors"
@@ -82,6 +180,23 @@ export default function JoinOrHost() {
               </button>
             </div>
             {error && <p className="text-xs text-rose-400 mt-1">{error}</p>}
+
+            {isScanning && (
+              <div className="space-y-2 mt-4 p-3 border border-line rounded-2xl bg-panel2 relative">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-slate-200">Scan QR Code</span>
+                  <button
+                    type="button"
+                    onClick={stopScanner}
+                    className="text-slate-400 hover:text-slate-200 text-xs"
+                  >
+                    Close
+                  </button>
+                </div>
+                <div id="reader" className="overflow-hidden rounded-xl bg-black" style={{ width: '100%', minHeight: '250px' }} />
+                {scanError && <p className="text-xs text-rose-400 mt-1">{scanError}</p>}
+              </div>
+            )}
           </form>
         </div>
       </div>

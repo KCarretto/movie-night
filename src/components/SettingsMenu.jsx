@@ -26,6 +26,7 @@ export default function SettingsMenu({ onAction }) {
 
   if (rt.isHost && rt.roomId) {
     items.push(['restartRoom', 'Restart room']);
+    items.push(['deleteRoom', 'Delete room']);
   }
 
   return (
@@ -70,7 +71,7 @@ export default function SettingsMenu({ onAction }) {
               <button
                 key={key}
                 type="button"
-                className={`w-full text-left px-3 py-2 rounded-md text-sm hover:bg-panel2 ${key === 'restartRoom' ? 'text-rose-400 hover:text-rose-300 font-semibold' : 'text-slate-200'}`}
+                className={`w-full text-left px-3 py-2 rounded-md text-sm hover:bg-panel2 ${(key === 'restartRoom' || key === 'deleteRoom') ? 'text-rose-400 hover:text-rose-300 font-semibold' : 'text-slate-200'}`}
                 onClick={() => {
                   setOpen(false);
                   onAction?.(key);
