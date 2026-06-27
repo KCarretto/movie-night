@@ -83,7 +83,9 @@ function handlePeerError(err) {
   if (t === 'peer-unavailable') {
     if (!runtime.isHost) {
       setStatus('warn', 'Host not found — retrying…');
-      setTimeout(() => { if (connections.size === 0) connectToHost(); }, 1500);
+      if (!isReconnecting) {
+        triggerGuestReconnection();
+      }
     }
   } else if (t === 'unavailable-id') {
     if (runtime.isHost) {
@@ -432,12 +434,17 @@ function triggerGuestReconnection() {
     attempts++;
     console.log(`Reconnection attempt #${attempts} to host...`);
     
-    if (!peer || peer.destroyed || peer.disconnected) {
+    if (!peer || peer.destroyed) {
       recreateGuestPeer(() => {
         connectToHost();
       });
-    } else {
+    } else if (peer.disconnected) {
+      console.log(`[NET] Peer disconnected from signaling. Reconnecting signaling...`);
+      try { peer.reconnect(); } catch (e) {}
+    } else if (peer.open) {
       connectToHost();
+    } else {
+      console.log(`[NET] Peer signaling connection still in progress, waiting...`);
     }
     
     reconnectTimeout = setTimeout(attempt, 2000);
