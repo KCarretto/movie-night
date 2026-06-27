@@ -130,7 +130,7 @@ export default function App() {
   const letterboxdRef = useRef(null);
   const [savedSig, setSavedSig] = useState('');
   const [showCelebration, setShowCelebration] = useState(false);
-  const prevPhaseRef = useRef(roomPhase);
+  const prevPhaseRef = useRef(rt.state?.phase || 'lobby');
 
   useEffect(() => {
     const out = boot();
