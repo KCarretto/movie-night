@@ -263,12 +263,8 @@ def movie_text(movie: Dict[str, Any]) -> str:
         ("Cast", _as_text(movie.get("cast"))),
         ("Genres", _as_text(movie.get("genres")) or _as_text(movie.get("primaryGenre"))),
         ("Overview", _as_text(movie.get("description"))),
-        ("Runtime", _get_runtime_vibe(runtime_val)),
-        ("Budget", _get_budget_vibe(budget_val)),
-        ("Revenue", _get_revenue_vibe(revenue_val)),
         ("Origin Country", _as_text(movie.get("origin_country"))),
         ("Reception", _get_vote_vibe(vote_avg_val)),
-        ("Status", _as_text(movie.get("status"))),
         ("Keywords", _as_text(movie.get("keywords"))),
     )
     return ". ".join(f"{label}: {value}" for label, value in fields if value)
