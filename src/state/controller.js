@@ -419,6 +419,13 @@ function triggerGuestReconnection() {
   let attempts = 0;
   const attempt = () => {
     if (!isReconnecting) return;
+    
+    if (pendingHostConn) {
+      console.log(`[NET] Connection attempt already in progress, waiting...`);
+      reconnectTimeout = setTimeout(attempt, 2000);
+      return;
+    }
+
     attempts++;
     console.log(`Reconnection attempt #${attempts} to host...`);
     
