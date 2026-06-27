@@ -59,11 +59,12 @@ function setStatus(kind, text) {
 }
 
 function updateNetCount() {
-  const state = S();
-  const count = runtime.isHost ? state.peers.length : (state.peers.length || connections.size + 1);
+  const count = connections.size + 1;
   runtime.connCount = connections.size;
   if (connections.size === 0 && !runtime.isHost) {
     setStatus('warn', 'Connecting…');
+  } else if (runtime.isHost) {
+    setStatus('ok', `Hosting · ${Math.min(count, MAX_PEERS)}/${MAX_PEERS}`);
   } else {
     setStatus('ok', `Connected · ${Math.min(count, MAX_PEERS)}/${MAX_PEERS}`);
   }
@@ -623,8 +624,7 @@ function applyRemoteState(remote) {
   runtime.state = remote;
   const me = remote.peers.find((p) => p.id === runtime.myId);
   runtime.myName = me ? me.name : 'Connecting…';
-  setStatus('ok', `Connected · ${remote.peers.length}/${MAX_PEERS}`);
-  emit();
+  updateNetCount();
 }
 
 // ======================================================================

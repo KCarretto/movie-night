@@ -41,12 +41,19 @@ function SortableItem({ id, movie, meta, index, onOpenInfo }) {
   const style = {
     transform: CSS.Translate.toString(transform),
     transition,
-    opacity: isDragging ? 0 : 1,
+    opacity: isDragging ? 0.3 : 1,
   };
 
   return (
-    <div ref={setNodeRef} style={style} className="rank-row rounded-lg border border-line bg-panel2 p-2.5 flex items-center">
-      <div {...attributes} {...listeners} className="drag-handle text-slate-500 mr-2 p-1 cursor-grab" style={{ touchAction: 'none' }}>
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className="rank-row rounded-lg border border-line bg-panel2 p-2.5 flex items-center cursor-grab active:cursor-grabbing hover:border-slate-500 transition-colors"
+      style={{ ...style, touchAction: 'none' }}
+    >
+      <div className="drag-handle text-slate-500 mr-2 p-1">
         <i className="fa-solid fa-grip-vertical" />
       </div>
       <div className="flex-1 min-w-0">
@@ -126,6 +133,72 @@ export default function Vote({ onOpenInfo }) {
     }
     setActiveId(null);
   };
+
+  const hasVoted = myVote.length > 0;
+
+  if (hasVoted) {
+    const activePeers = rt.state?.peers?.filter(p => p.connected !== false) || [];
+    const votedCount = Object.keys(rt.state?.votes || {}).length;
+
+    return (
+      <section className="card p-5 text-center space-y-4 bg-panel border border-line rounded-2xl relative overflow-hidden">
+        <div className="absolute -top-24 -left-24 w-48 h-48 rounded-full bg-accent/10 blur-3xl" />
+        <div className="absolute -bottom-24 -right-24 w-48 h-48 rounded-full bg-accent2/20 blur-3xl" />
+
+        <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center mx-auto text-xl animate-bounce relative z-10">
+          <i className="fa-solid fa-check" />
+        </div>
+        <div className="space-y-1 relative z-10">
+          <h2 className="text-xl font-semibold text-white">Thanks for your votes!</h2>
+          <p className="text-sm text-slate-400">Your ballot has been successfully submitted.</p>
+        </div>
+
+        <div className="border-t border-line my-4 relative z-10" />
+
+        <div className="space-y-3 text-left max-w-sm mx-auto relative z-10">
+          <div className="flex justify-between text-xs text-slate-400 uppercase tracking-wider mb-2">
+            <span>Roster status</span>
+            <span>{votedCount} / {activePeers.length} Voted</span>
+          </div>
+
+          <div className="space-y-2">
+            {activePeers.map((p) => {
+              const voted = Boolean(rt.state?.votes?.[p.id]);
+              return (
+                <div key={p.id} className="flex items-center justify-between text-sm py-1.5 px-3 rounded-lg bg-panel2 border border-line/50">
+                  <span className={voted ? "text-slate-300" : "text-slate-100 font-medium"}>{p.name}</span>
+                  <span className={`text-xs flex items-center gap-1.5 ${voted ? "text-emerald-400" : "text-amber-400"}`}>
+                    {voted ? (
+                      <>
+                        <i className="fa-solid fa-circle-check" />
+                        Voted
+                      </>
+                    ) : (
+                      <>
+                        <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping" />
+                        Voting...
+                      </>
+                    )}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {rt.isHost && (
+          <div className="pt-2 flex justify-center gap-3 relative z-10">
+            <button type="button" className="btn px-4 py-2 rounded-lg border border-line bg-panel2 text-xs text-rose-300 hover:text-rose-200" onClick={() => actions.cancelVoting()}>
+              Cancel voting
+            </button>
+            <button type="button" className="btn px-4 py-2 rounded-lg border border-line bg-panel2 text-xs hover:bg-slate-800" onClick={() => actions.closeVoting()}>
+              Close voting now
+            </button>
+          </div>
+        )}
+      </section>
+    );
+  }
 
   return (
     <section className="card p-4 sm:p-5">

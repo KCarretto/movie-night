@@ -8,6 +8,7 @@ import Vote from './components/Vote.jsx';
 import RecentlyNominated from './components/RecentlyNominated.jsx';
 import Results from './components/Results.jsx';
 import History from './components/History.jsx';
+import MyNominations from './components/MyNominations.jsx';
 import StartVoteModal from './modals/StartVoteModal.jsx';
 import ImportConfirmModal from './modals/ImportConfirmModal.jsx';
 import SyncModal from './modals/SyncModal.jsx';
@@ -128,6 +129,8 @@ export default function App() {
   const importRef = useRef(null);
   const letterboxdRef = useRef(null);
   const [savedSig, setSavedSig] = useState('');
+  const [showCelebration, setShowCelebration] = useState(false);
+  const prevPhaseRef = useRef(roomPhase);
 
   useEffect(() => {
     const out = boot();
@@ -172,6 +175,15 @@ export default function App() {
   }, [rt.state?.phase, rt.state?.results, rt.state?.movies, rt.roomId, savedSig]);
 
   const roomPhase = rt.state?.phase || 'lobby';
+
+  useEffect(() => {
+    if (roomPhase === 'results' && prevPhaseRef.current !== 'results') {
+      setShowCelebration(true);
+      const t = setTimeout(() => setShowCelebration(false), 4500);
+      return () => clearTimeout(t);
+    }
+    prevPhaseRef.current = roomPhase;
+  }, [roomPhase]);
 
   // Persist user's own nominations for the current room ID
   useEffect(() => {
@@ -401,7 +413,7 @@ export default function App() {
                   <Lobby />
                 </div>
 
-                <div className="grid gap-4 mt-4 min-w-0">
+                <div className="grid md:grid-cols-2 gap-4 mt-4 min-w-0">
                   <div className="space-y-4 flex flex-col min-w-0">
                     <Recommendations
                       onOpenRec={(rec) => setRecDetail(rec)}
@@ -412,6 +424,7 @@ export default function App() {
                   </div>
                   <div className="space-y-4 flex flex-col min-w-0">
                     <Nominate onOpenStartVote={() => setStartVoteOpen(true)} />
+                    <MyNominations onOpenInfo={(rec) => setRecDetail({ movie: rec })} />
                     <RecentlyNominated onOpenInfo={(rec) => setRecDetail({ movie: rec })} />
                   </div>
                 </div>
@@ -490,6 +503,44 @@ export default function App() {
         onClose={() => setRateState({ open: false, title: '', initial: 0 })}
         onSave={handleRateSave}
       />
+      {showCelebration && <PopcornCelebration />}
+    </div>
+  );
+}
+
+function PopcornCelebration() {
+  const particles = useMemo(() => {
+    const emojis = ['🍿', '🍿', '🎉', '✨', '🎬', '🍿'];
+    return Array.from({ length: 65 }).map((_, i) => {
+      const xOffset = `${(Math.random() - 0.5) * 350}px`;
+      const yTarget = `-${60 + Math.random() * 40}vh`;
+      const rotation = `${(Math.random() - 0.5) * 720}deg`;
+      const duration = `${1.2 + Math.random() * 1.8}s`;
+      const delay = `${Math.random() * 1.5}s`;
+      const left = `${5 + Math.random() * 90}%`;
+      const emoji = emojis[i % emojis.length];
+      return {
+        id: i,
+        emoji,
+        style: {
+          left,
+          '--x-offset': xOffset,
+          '--y-target': yTarget,
+          '--rotation': rotation,
+          '--duration': duration,
+          animationDelay: delay,
+        },
+      };
+    });
+  }, []);
+
+  return (
+    <div className="fixed inset-0 pointer-events-none z-50 overflow-hidden">
+      {particles.map((p) => (
+        <span key={p.id} className="popcorn-particle" style={p.style}>
+          {p.emoji}
+        </span>
+      ))}
     </div>
   );
 }
