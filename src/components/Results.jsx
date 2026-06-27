@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { movieMeta } from '../lib/catalog.js';
 import Poster from '../ui/Poster.jsx';
 import Stars from '../ui/Stars.jsx';
@@ -16,6 +16,33 @@ export default function Results({ onRateWinner }) {
     if (!pick) return null;
     return { pick, meta: movieMeta(pick.title, pick.tmdbId) };
   }, [results, movies]);
+
+  const roundsCount = results?.rounds?.length || 0;
+  const [visibleRounds, setVisibleRounds] = useState(1);
+  const [isPlaying, setIsPlaying] = useState(true);
+
+  useEffect(() => {
+    setVisibleRounds(1);
+    setIsPlaying(true);
+  }, [results?.winnerId, roundsCount]);
+
+  useEffect(() => {
+    if (!results) return;
+    if (!isPlaying) return;
+    if (visibleRounds >= roundsCount) {
+      setIsPlaying(false);
+      return;
+    }
+    const timer = setTimeout(() => {
+      setVisibleRounds((v) => v + 1);
+    }, 1400); // 1.4 seconds per round
+    return () => clearTimeout(timer);
+  }, [visibleRounds, isPlaying, roundsCount, results]);
+
+  const handleReplay = () => {
+    setVisibleRounds(1);
+    setIsPlaying(true);
+  };
 
   if (!results) {
     return <section className="card p-4 sm:p-5 text-sm text-slate-400">No results yet.</section>;
@@ -50,17 +77,36 @@ export default function Results({ onRateWinner }) {
       </section>
 
       <section className="card p-4 sm:p-5">
-        <h3 className="font-semibold text-white mb-2">Round-by-round tally</h3>
+        <div className="flex items-center justify-between gap-3 mb-3">
+          <h3 className="font-semibold text-white">Round-by-round tally</h3>
+          {roundsCount > 1 && (
+            <button
+              type="button"
+              className="btn px-2.5 py-1 rounded-lg border border-line bg-panel2 text-xs flex items-center gap-1.5 hover:bg-slate-800 text-slate-300 disabled:opacity-50"
+              onClick={handleReplay}
+              disabled={isPlaying}
+            >
+              <i className={`fa-solid ${isPlaying ? 'fa-spinner fa-spin' : 'fa-arrow-rotate-right'}`} />
+              {isPlaying ? 'Animating…' : 'Replay'}
+            </button>
+          )}
+        </div>
         <div className="space-y-3">
-          {(results.rounds || []).map((r, idx) => (
-            <div key={idx} className="rounded-lg border border-line bg-panel2 p-3">
+          {(results.rounds || []).slice(0, visibleRounds).map((r, idx) => (
+            <div key={idx} className="round-card rounded-lg border border-line bg-panel2 p-3">
               <div className="text-sm text-white mb-2">Round {idx + 1}</div>
               <div className="space-y-1.5">
                 {(r.tally || []).map((t) => (
                   <div key={t.id} className="flex items-center gap-2 text-xs">
                     <div className="w-36 truncate text-slate-200">{t.title}</div>
                     <div className="flex-1 h-2 rounded-full bg-ink overflow-hidden">
-                      <div className="h-full bg-accent2" style={{ width: `${r.counted ? (t.votes / r.counted) * 100 : 0}%` }} />
+                      <div
+                        className="h-full bg-accent2 bar-grow"
+                        style={{
+                          width: `${r.counted ? (t.votes / r.counted) * 100 : 0}%`,
+                          transformOrigin: 'left'
+                        }}
+                      />
                     </div>
                     <div className="w-10 text-right text-slate-300">{t.votes}</div>
                   </div>

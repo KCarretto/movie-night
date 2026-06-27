@@ -4,6 +4,7 @@ import GenreTags from '../ui/GenreTags.jsx';
 import LanguageBadge from '../ui/LanguageBadge.jsx';
 import RatingsLine from '../ui/RatingsLine.jsx';
 import StarRating from '../ui/StarRating.jsx';
+import { useStore } from '../state/useStore.js';
 import { actions, afterTasteChange, shareSeen } from '../state/controller.js';
 import {
   addToWatchlist, inWatchlist, loadInterested, loadNotInterested,
@@ -12,6 +13,7 @@ import {
 import { markRankingStale } from '../lib/recengine.js';
 
 export default function RecDetailModal({ open, rec, onClose, onRate }) {
+  const rt = useStore();
   const m = rec?.movie;
   if (!m) return null;
   const watchlisted = inWatchlist(m.title);
@@ -43,9 +45,11 @@ export default function RecDetailModal({ open, rec, onClose, onRate }) {
           <p className="text-sm text-slate-300">{m.description || 'No description available.'}</p>
 
           <div className="flex flex-wrap gap-2 pt-1">
-            <button type="button" className="btn btn-accent2 px-3 py-2 rounded-lg text-sm text-white" onClick={() => actions.nominate(m.title, m.id || m.tmdb_id)}>
-              Nominate
-            </button>
+            {rt.state?.phase === 'lobby' && (
+              <button type="button" className="btn btn-accent2 px-3 py-2 rounded-lg text-sm text-white" onClick={() => { actions.nominate(m.title, m.id || m.tmdb_id); onClose(); }}>
+                Nominate
+              </button>
+            )}
             <button
               type="button"
               className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm"
@@ -58,25 +62,27 @@ export default function RecDetailModal({ open, rec, onClose, onRate }) {
             </button>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2">
-            <StarRating
-              value={interested?.interest || 0}
-              onChange={(n) => {
-                if (n > 0) {
-                  upsertInterested(m.title, n);
-                  tasteTouch();
-                  onClose();
-                }
-              }}
-            />
-            <button
-              type="button"
-              className={`text-xs px-2 py-1 rounded-full border ml-2 ${skipped ? 'border-rose-400 text-rose-300' : 'border-line text-slate-300'}`}
-              onClick={() => { markNotInterested(m.title); tasteTouch(); onClose(); }}
-            >
-              Not interested
-            </button>
-          </div>
+          {rt.state?.phase === 'lobby' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <StarRating
+                value={interested?.interest || 0}
+                onChange={(n) => {
+                  if (n > 0) {
+                    upsertInterested(m.title, n);
+                    tasteTouch();
+                    onClose();
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className={`text-xs px-2 py-1 rounded-full border ml-2 ${skipped ? 'border-rose-400 text-rose-300' : 'border-line text-slate-300'}`}
+                onClick={() => { markNotInterested(m.title); tasteTouch(); onClose(); }}
+              >
+                Not interested
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </Modal>
