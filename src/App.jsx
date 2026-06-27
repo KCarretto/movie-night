@@ -364,6 +364,12 @@ export default function App() {
     if (action === 'sync') return setSyncModalOpen(true);
     if (action === 'reset') return resetPrefs();
     if (action === 'deleteAll') return deleteAll();
+    if (action === 'restartRoom') {
+      if (window.confirm("Are you sure you want to completely restart this room? This will wipe all nominations, votes, and results.")) {
+        actions.reset();
+      }
+      return;
+    }
   };
 
   const loadingText = useMemo(() => {

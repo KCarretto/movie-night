@@ -1,16 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-
-const ITEMS = [
-  ['changeName', 'Change name'],
-  ['export', 'Export data'],
-  ['import', 'Import data'],
-  ['importLetterboxd', 'Import Letterboxd'],
-  ['sync', 'Sync preferences'],
-  ['reset', 'Reset preferences'],
-  ['deleteAll', 'Delete all data'],
-];
+import { useStore } from '../state/useStore.js';
 
 export default function SettingsMenu({ onAction }) {
+  const rt = useStore();
   const [open, setOpen] = useState(false);
   const wrapRef = useRef(null);
 
@@ -21,6 +13,20 @@ export default function SettingsMenu({ onAction }) {
     document.addEventListener('click', onDoc);
     return () => document.removeEventListener('click', onDoc);
   }, []);
+
+  const items = [
+    ['changeName', 'Change name'],
+    ['export', 'Export data'],
+    ['import', 'Import data'],
+    ['importLetterboxd', 'Import Letterboxd'],
+    ['sync', 'Sync preferences'],
+    ['reset', 'Reset preferences'],
+    ['deleteAll', 'Delete all data'],
+  ];
+
+  if (rt.isHost && rt.roomId) {
+    items.push(['restartRoom', 'Restart room']);
+  }
 
   return (
     <div className="relative" ref={wrapRef}>
@@ -34,7 +40,7 @@ export default function SettingsMenu({ onAction }) {
       </button>
       {open && (
         <div className="menu card p-1.5">
-          {ITEMS.map(([key, label]) => (
+          {items.map(([key, label]) => (
             key === 'importLetterboxd' ? (
               <div key={key} className="flex items-center group relative whitespace-nowrap">
                 <button
@@ -64,7 +70,7 @@ export default function SettingsMenu({ onAction }) {
               <button
                 key={key}
                 type="button"
-                className="w-full text-left px-3 py-2 rounded-md text-sm text-slate-200 hover:bg-panel2"
+                className={`w-full text-left px-3 py-2 rounded-md text-sm hover:bg-panel2 ${key === 'restartRoom' ? 'text-rose-400 hover:text-rose-300 font-semibold' : 'text-slate-200'}`}
                 onClick={() => {
                   setOpen(false);
                   onAction?.(key);
