@@ -13,7 +13,7 @@ import {
 } from '../lib/constants.js';
 import { runtime, emit } from '../lib/runtime.js';
 import {
-  loadSavedName, rememberHostRoom, recallHostRoom, mySeenShare,
+  loadSavedName, rememberHostRoom, recallHostRoom, mySeenShare, saveHostSession, loadHostSession
 } from '../lib/storage.js';
 import { loadMovieDb, movieMeta } from '../lib/catalog.js';
 import { computeMyCentroids } from '../lib/recengine.js';
@@ -100,10 +100,17 @@ export function boot() {
   const urlRoom = params.get('room');
   const syncId = params.get('sync');
   const hostRoom = recallHostRoom();
+  const session = loadHostSession();
 
   if (urlRoom && normalizeRoomId(urlRoom) === hostRoom) {
     runtime.isHost = true;
     runtime.roomId = hostRoom;
+    startHost();
+  } else if (!urlRoom && session && session.roomId === hostRoom) {
+    runtime.isHost = true;
+    runtime.roomId = session.roomId;
+    const url = `${location.pathname}?room=${runtime.roomId}`;
+    history.replaceState({ room: runtime.roomId }, '', url);
     startHost();
   } else if (urlRoom) {
     runtime.isHost = false;
@@ -135,9 +142,39 @@ function startHost() {
   peer.on('open', (id) => {
     runtime.myId = id;
     const initialName = loadSavedName() || pickNickname([]);
-    S().peers = [{ id, name: initialName }];
     runtime.myName = initialName;
-    setStatus('ok', `Hosting · 1/${MAX_PEERS}`);
+
+    const session = loadHostSession();
+    if (session && session.roomId === runtime.roomId) {
+      // Rehydrate state
+      Object.assign(S(), session.state);
+      // Ensure the host's identity matches this session's new peer ID
+      const oldHost = S().peers[0];
+      if (oldHost) {
+        if (id !== oldHost.id) {
+          if (S().seen && S().seen[oldHost.id]) {
+            S().seen[id] = S().seen[oldHost.id];
+            delete S().seen[oldHost.id];
+          }
+          if (S().votes && S().votes[oldHost.id]) {
+            S().votes[id] = S().votes[oldHost.id];
+            delete S().votes[oldHost.id];
+          }
+          if (S().peerVectors && S().peerVectors[oldHost.id]) {
+            S().peerVectors[id] = S().peerVectors[oldHost.id];
+            delete S().peerVectors[oldHost.id];
+          }
+        }
+        oldHost.id = id;
+        oldHost.name = initialName;
+      } else {
+        S().peers = [{ id, name: initialName }];
+      }
+    } else {
+      S().peers = [{ id, name: initialName }];
+    }
+
+    setStatus('ok', `Hosting · ${S().peers.length}/${MAX_PEERS}`);
     // Register the host's own watched movies into the shared seen map.
     if (S().seen) S().seen[id] = mySeenShare();
     else S().seen = { [id]: mySeenShare() };
@@ -255,7 +292,17 @@ function handleMessage(conn, msg) {
 // ======================================================================
 function hostAddPeer(peerId, requestedName) {
   const state = S();
-  if (state.peers.find((p) => p.id === peerId)) return;
+  const existingPeer = state.peers.find((p) => p.id === peerId);
+
+  if (existingPeer) {
+    // Guest is already known (reconnected). Ensure they get the current state and directory.
+    const conn = connections.get(peerId);
+    if (conn) {
+      safeSend(conn, { type: 'directory', peers: state.peers.map((p) => p.id) });
+      safeSend(conn, { type: 'state', state });
+    }
+    return;
+  }
 
   if (state.peers.length >= MAX_PEERS) {
     const conn = connections.get(peerId);
@@ -297,6 +344,9 @@ function broadcastDirectory() {
 }
 
 function broadcastState() {
+  if (runtime.isHost) {
+    saveHostSession(runtime.roomId, S());
+  }
   broadcast({ type: 'state', state: S() });
 }
 

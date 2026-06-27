@@ -24,6 +24,7 @@ export function saveName(name) {
 
 // ---- Host-resume persistence (per tab) so a host can refresh the page ------
 const HOST_ROOM_KEY = 'movieNightHostRoom';
+const HOST_SESSION_KEY = 'movieNightHostSession';
 const REC_SESSION_SEEN_KEY = 'movieNightRecSeen';
 export function rememberHostRoom(id) {
   try { localStorage.setItem(HOST_ROOM_KEY, id); } catch (e) { /* ignore */ }
@@ -31,6 +32,27 @@ export function rememberHostRoom(id) {
 export function recallHostRoom() {
   try { return localStorage.getItem(HOST_ROOM_KEY) || ''; }
   catch (e) { return ''; }
+}
+export function saveHostSession(roomId, state) {
+  try {
+    const payload = { roomId, state, timestamp: Date.now() };
+    localStorage.setItem(HOST_SESSION_KEY, JSON.stringify(payload));
+  } catch (e) { /* ignore */ }
+}
+export function loadHostSession() {
+  try {
+    const raw = localStorage.getItem(HOST_SESSION_KEY);
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    // Expire after 24 hours (24 * 60 * 60 * 1000 ms)
+    if (Date.now() - data.timestamp > 86400000) {
+      localStorage.removeItem(HOST_SESSION_KEY);
+      return null;
+    }
+    return data;
+  } catch (e) {
+    return null;
+  }
 }
 export function loadSeenRecommendations() {
   try {
