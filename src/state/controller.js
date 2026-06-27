@@ -60,14 +60,19 @@ function setStatus(kind, text) {
 }
 
 function updateNetCount() {
-  const count = connections.size + 1;
-  runtime.connCount = connections.size;
-  if (connections.size === 0 && !runtime.isHost) {
-    setStatus('warn', 'Connecting…');
-  } else if (runtime.isHost) {
-    setStatus('ok', `Hosting · ${Math.min(count, MAX_PEERS)}/${MAX_PEERS}`);
+  const peers = S()?.peers || [];
+  const connectedCount = peers.filter((p) => p.connected !== false).length;
+  runtime.connCount = connectedCount;
+
+  if (runtime.isHost) {
+    setStatus('ok', `Hosting · ${connectedCount}/${MAX_PEERS}`);
   } else {
-    setStatus('ok', `Connected · ${Math.min(count, MAX_PEERS)}/${MAX_PEERS}`);
+    const hostConn = connections.get(`room-${runtime.roomId}-host`);
+    if (!hostConn || !hostConn.open) {
+      setStatus('warn', 'Connecting…');
+    } else {
+      setStatus('ok', `Connected · ${connectedCount}/${MAX_PEERS}`);
+    }
   }
 }
 
