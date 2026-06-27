@@ -365,7 +365,7 @@ export default function App() {
                   </div>
                   <div className="space-y-4 flex flex-col min-w-0">
                     <Nominate onOpenStartVote={() => setStartVoteOpen(true)} />
-                    <RecentlyNominated onOpenInfo={(rec) => setRecDetail(rec)} />
+                    <RecentlyNominated onOpenInfo={(rec) => setRecDetail({ movie: rec })} />
                   </div>
                 </div>
               </>
@@ -373,7 +373,7 @@ export default function App() {
 
             {roomPhase === 'voting' && (
               <div className="grid gap-4 min-w-0">
-                <Vote onOpenInfo={(rec) => setRecDetail(rec)} />
+                <Vote onOpenInfo={(rec) => setRecDetail({ movie: rec })} />
               </div>
             )}
 
