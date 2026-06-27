@@ -181,3 +181,53 @@ export function markNotSure(title) {
     saveNotSure(list);
   }
 }
+
+// ---- Persist nominations and votes per room with 24-hour expiration ----------
+export function saveMyNominations(roomId, nominations) {
+  try {
+    const key = `movieNightNominations_${roomId}`;
+    const payload = { nominations, timestamp: Date.now() };
+    localStorage.setItem(key, JSON.stringify(payload));
+  } catch (e) { /* ignore */ }
+}
+
+export function loadMyNominations(roomId) {
+  try {
+    const key = `movieNightNominations_${roomId}`;
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const data = JSON.parse(raw);
+    if (Date.now() - data.timestamp > 86400000) {
+      localStorage.removeItem(key);
+      return [];
+    }
+    return Array.isArray(data.nominations) ? data.nominations : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+export function saveMyVoteOrder(roomId, orderedTitles) {
+  try {
+    const key = `movieNightVotes_${roomId}`;
+    const payload = { orderedTitles, timestamp: Date.now() };
+    localStorage.setItem(key, JSON.stringify(payload));
+  } catch (e) { /* ignore */ }
+}
+
+export function loadMyVoteOrder(roomId) {
+  try {
+    const key = `movieNightVotes_${roomId}`;
+    const raw = localStorage.getItem(key);
+    if (!raw) return [];
+    const data = JSON.parse(raw);
+    if (Date.now() - data.timestamp > 86400000) {
+      localStorage.removeItem(key);
+      return [];
+    }
+    return Array.isArray(data.orderedTitles) ? data.orderedTitles : [];
+  } catch (e) {
+    return [];
+  }
+}
+

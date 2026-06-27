@@ -23,6 +23,31 @@ let peer = null; // PeerJS instance
 const connections = new Map(); // peerId -> DataConnection (open)
 let booted = false;
 
+// Keep-alive timers and state
+const lastActive = new Map(); // peerId -> timestamp
+let heartbeatInterval = null;
+let hostCheckInterval = null;
+let lastHostActive = 0;
+let reconnectTimeout = null;
+let isReconnecting = false;
+
+window.addEventListener('beforeunload', () => {
+  try {
+    if (peer) peer.destroy();
+  } catch (e) {}
+});
+
+function logNetwork(direction, peerId, msg) {
+  const isHostMsg = !runtime.isHost && peerId === `room-${runtime.roomId}-host`;
+  const hostIndicator = isHostMsg ? '👑 [HOST]' : '';
+  console.log(
+    `%c[${direction}]%c ${hostIndicator} to/from [${peerId}]:`,
+    direction === 'SEND' ? 'color: #38bdf8; font-weight: bold;' : 'color: #34d399; font-weight: bold;',
+    isHostMsg ? 'color: #fbbf24; font-weight: bold;' : 'color: #94a3b8;',
+    msg
+  );
+}
+
 // Convenience: the authoritative state object lives on the runtime store.
 function S() { return runtime.state; }
 
@@ -117,12 +142,10 @@ export function boot() {
     runtime.roomId = normalizeRoomId(urlRoom);
     startGuest();
   } else {
-    runtime.isHost = true;
-    runtime.roomId = randomRoomId();
-    rememberHostRoom(runtime.roomId);
-    const url = `${location.pathname}?room=${runtime.roomId}`;
-    history.pushState({ room: runtime.roomId }, '', url);
-    startHost();
+    // DO NOT automatically host a room!
+    // Instead, leave runtime.roomId = null and let the Landing UI handle it.
+    runtime.roomId = null;
+    runtime.isHost = false;
   }
 
   emit();
@@ -131,11 +154,35 @@ export function boot() {
   return { syncId };
 }
 
+export function startHostingRoom(roomId) {
+  runtime.isHost = true;
+  runtime.roomId = roomId || randomRoomId();
+  rememberHostRoom(runtime.roomId);
+  const url = `${location.origin}${location.pathname}?room=${runtime.roomId}`;
+  history.pushState({ room: runtime.roomId }, '', url);
+  startHost();
+  emit();
+}
+
+export function joinRoom(roomId) {
+  const norm = normalizeRoomId(roomId);
+  if (!norm) return;
+  runtime.isHost = false;
+  runtime.roomId = norm;
+  const url = `${location.origin}${location.pathname}?room=${runtime.roomId}`;
+  history.pushState({ room: runtime.roomId }, '', url);
+  startGuest();
+  emit();
+}
+
 // ======================================================================
 //  HOST SETUP
 // ======================================================================
 function startHost() {
   setStatus('warn', 'Starting host…');
+  stopHostHeartbeatCheck();
+  stopGuestHeartbeat();
+  stopGuestReconnection();
   try { if (peer) peer.destroy(); } catch (e) { /* ignore */ }
   peer = new Peer(`room-${runtime.roomId}-host`, { debug: 1 });
 
@@ -168,25 +215,29 @@ function startHost() {
         oldHost.id = id;
         oldHost.name = initialName;
       } else {
-        S().peers = [{ id, name: initialName }];
+        S().peers = [{ id, name: initialName, connected: true }];
       }
     } else {
-      S().peers = [{ id, name: initialName }];
+      S().peers = [{ id, name: initialName, connected: true }];
     }
 
-    setStatus('ok', `Hosting · ${S().peers.length}/${MAX_PEERS}`);
+    setStatus('ok', `Hosting · ${S().peers.filter(p => p.connected !== false).length}/${MAX_PEERS}`);
     // Register the host's own watched movies into the shared seen map.
     if (S().seen) S().seen[id] = mySeenShare();
     else S().seen = { [id]: mySeenShare() };
     emit();
     // Seed the host's own taste vector (may be empty until embeddings load).
     shareVector();
+    startHostHeartbeatCheck();
     emit();
   });
 
   peer.on('connection', (conn) => setupConnection(conn));
   peer.on('error', (err) => handlePeerError(err));
-  peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) { /* ignore */ } });
+  peer.on('disconnected', () => {
+    console.warn('Host disconnected from signaling server. Retrying to reconnect...');
+    try { peer.reconnect(); } catch (e) { /* ignore */ }
+  });
 }
 
 // ======================================================================
@@ -196,6 +247,10 @@ function startGuest() {
   setStatus('warn', 'Connecting…');
   runtime.myName = 'Connecting…';
   emit();
+
+  stopHostHeartbeatCheck();
+  stopGuestHeartbeat();
+  stopGuestReconnection();
 
   let peerId = localStorage.getItem('movieNightGuestId');
   if (!peerId) {
@@ -211,17 +266,150 @@ function startGuest() {
   });
   peer.on('connection', (conn) => setupConnection(conn));
   peer.on('error', (err) => handlePeerError(err));
-  peer.on('disconnected', () => { try { peer.reconnect(); } catch (e) { /* ignore */ } });
+  peer.on('disconnected', () => {
+    console.warn('Guest disconnected from signaling server. Retrying to reconnect...');
+    try { peer.reconnect(); } catch (e) { /* ignore */ }
+  });
 }
 
 function connectToHost() {
   const hostId = `room-${runtime.roomId}-host`;
   const conn = peer.connect(hostId, { reliable: true, metadata: { role: 'guest' } });
   setupConnection(conn, () => {
+    stopGuestReconnection();
+    startGuestHeartbeat();
     safeSend(conn, { type: 'join', name: loadSavedName() });
     safeSend(conn, { type: 'action', action: { type: 'setSeen', seen: mySeenShare() } });
     safeSend(conn, { type: 'action', action: { type: 'setVector', vector: myTasteVector() } });
   });
+}
+
+function recreateGuestPeer(onOpen) {
+  try { if (peer) peer.destroy(); } catch (e){}
+  
+  let peerId = localStorage.getItem('movieNightGuestId');
+  if (!peerId) {
+    peerId = `peer-${Math.random().toString(36).slice(2, 10)}`;
+    localStorage.setItem('movieNightGuestId', peerId);
+  }
+  
+  peer = new Peer(peerId, { debug: 1 });
+  peer.on('open', (id) => {
+    runtime.myId = id;
+    if (typeof onOpen === 'function') onOpen();
+  });
+  peer.on('connection', (conn) => setupConnection(conn));
+  peer.on('error', (err) => handlePeerError(err));
+  peer.on('disconnected', () => {
+    try { peer.reconnect(); } catch (e) {}
+  });
+}
+
+function startHostHeartbeatCheck() {
+  stopHostHeartbeatCheck();
+  heartbeatInterval = setInterval(() => {
+    const now = Date.now();
+    let stateChanged = false;
+    S().peers.forEach((p) => {
+      if (p.id === runtime.myId) return; // skip host
+      const lastTime = lastActive.get(p.id) || 0;
+      if (lastTime > 0 && now - lastTime > 30000) {
+        if (p.connected !== false) {
+          p.connected = false;
+          stateChanged = true;
+          console.log(`Peer ${p.name} (${p.id}) keep-alive timed out.`);
+          broadcast({ type: 'peer-left', peerId: p.id, name: p.name });
+          const conn = connections.get(p.id);
+          if (conn) {
+            try { conn.close(); } catch (e) {}
+            connections.delete(p.id);
+          }
+        }
+      }
+    });
+    if (stateChanged) {
+      broadcastState();
+      emit();
+      updateNetCount();
+    }
+  }, 5000);
+}
+
+function stopHostHeartbeatCheck() {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+}
+
+function startGuestHeartbeat() {
+  stopGuestHeartbeat();
+  lastHostActive = Date.now();
+  heartbeatInterval = setInterval(() => {
+    const hostConn = connections.get(`room-${runtime.roomId}-host`);
+    if (hostConn && hostConn.open) {
+      safeSend(hostConn, { type: 'ping' });
+    }
+  }, 5000);
+
+  hostCheckInterval = setInterval(() => {
+    if (Date.now() - lastHostActive > 30000) {
+      console.warn('Host heartbeat timed out. Reconnecting...');
+      triggerGuestReconnection();
+    }
+  }, 5000);
+}
+
+function stopGuestHeartbeat() {
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
+  }
+  if (hostCheckInterval) {
+    clearInterval(hostCheckInterval);
+    hostCheckInterval = null;
+  }
+}
+
+function triggerGuestReconnection() {
+  if (runtime.isHost) return;
+  if (isReconnecting) return;
+  isReconnecting = true;
+  setStatus('warn', 'Connection lost — reconnecting…');
+  stopGuestHeartbeat();
+  
+  connections.forEach((conn) => {
+    try { conn.close(); } catch (e) {}
+  });
+  connections.clear();
+  updateNetCount();
+  
+  let attempts = 0;
+  const attempt = () => {
+    if (!isReconnecting) return;
+    attempts++;
+    console.log(`Reconnection attempt #${attempts} to host...`);
+    
+    if (!peer || peer.destroyed || peer.disconnected) {
+      recreateGuestPeer(() => {
+        connectToHost();
+      });
+    } else {
+      connectToHost();
+    }
+    
+    reconnectTimeout = setTimeout(attempt, 2000);
+  };
+  
+  attempt();
+}
+
+function stopGuestReconnection() {
+  isReconnecting = false;
+  if (reconnectTimeout) {
+    clearTimeout(reconnectTimeout);
+    reconnectTimeout = null;
+  }
 }
 
 // ======================================================================
@@ -230,21 +418,52 @@ function connectToHost() {
 function setupConnection(conn, onOpen) {
   conn.on('open', () => {
     if (connections.has(conn.peer) && connections.get(conn.peer) !== conn) {
-      try { conn.close(); } catch (e) { /* ignore */ }
-      return;
+      const oldConn = connections.get(conn.peer);
+      console.log(`Replacing duplicate/reconnection from peer: ${conn.peer}`);
+      try { oldConn.close(); } catch (e) { /* ignore */ }
     }
     connections.set(conn.peer, conn);
+    if (runtime.isHost) {
+      lastActive.set(conn.peer, Date.now());
+      const existingPeer = S().peers.find(p => p.id === conn.peer);
+      if (existingPeer && existingPeer.connected === false) {
+        existingPeer.connected = true;
+        broadcastState();
+        emit();
+      }
+    } else {
+      if (conn.peer === `room-${runtime.roomId}-host`) {
+        lastHostActive = Date.now();
+      }
+    }
     updateNetCount();
     if (typeof onOpen === 'function') onOpen();
   });
 
-  conn.on('data', (msg) => handleMessage(conn, msg));
+  conn.on('data', (msg) => {
+    logNetwork('RECV', conn.peer, msg);
+    if (runtime.isHost) {
+      lastActive.set(conn.peer, Date.now());
+    } else {
+      if (conn.peer === `room-${runtime.roomId}-host`) {
+        lastHostActive = Date.now();
+      }
+    }
+    handleMessage(conn, msg);
+  });
 
   conn.on('close', () => {
     if (connections.get(conn.peer) === conn) connections.delete(conn.peer);
-    if (runtime.isHost) removePeer(conn.peer);
-    else if (conn.peer === `room-${runtime.roomId}-host`) {
-      setTimeout(() => { if (connections.size === 0) connectToHost(); }, 2000);
+    if (runtime.isHost) {
+      const p = S().peers.find((x) => x.id === conn.peer);
+      if (p && p.connected !== false) {
+        p.connected = false;
+        broadcast({ type: 'peer-left', peerId: conn.peer, name: p.name });
+        broadcastState();
+        emit();
+      }
+    } else if (conn.peer === `room-${runtime.roomId}-host`) {
+      triggerGuestReconnection();
     }
     updateNetCount();
   });
@@ -253,7 +472,12 @@ function setupConnection(conn, onOpen) {
 }
 
 function safeSend(conn, obj) {
-  try { if (conn && conn.open) conn.send(obj); } catch (e) { /* ignore */ }
+  try {
+    if (conn && conn.open) {
+      logNetwork('SEND', conn.peer, obj);
+      conn.send(obj);
+    }
+  } catch (e) { /* ignore */ }
 }
 
 function broadcast(obj, exceptId) {
@@ -284,6 +508,26 @@ function handleMessage(conn, msg) {
       if (!runtime.isHost) return;
       applyAction(msg.action, conn.peer);
       break;
+    case 'peer-left':
+      console.log(`%c[INFO] Peer left: ${msg.name || msg.peerId}`, 'color: #f43f5e; font-weight: bold;');
+      break;
+    case 'ping':
+      if (runtime.isHost) {
+        lastActive.set(conn.peer, Date.now());
+        const pObj = S().peers.find(p => p.id === conn.peer);
+        if (pObj && pObj.connected === false) {
+          pObj.connected = true;
+          broadcastState();
+          emit();
+        }
+        safeSend(conn, { type: 'pong' });
+      }
+      break;
+    case 'pong':
+      if (!runtime.isHost) {
+        lastHostActive = Date.now();
+      }
+      break;
   }
 }
 
@@ -295,12 +539,16 @@ function hostAddPeer(peerId, requestedName) {
   const existingPeer = state.peers.find((p) => p.id === peerId);
 
   if (existingPeer) {
+    existingPeer.connected = true;
+    lastActive.set(peerId, Date.now());
     // Guest is already known (reconnected). Ensure they get the current state and directory.
     const conn = connections.get(peerId);
     if (conn) {
       safeSend(conn, { type: 'directory', peers: state.peers.map((p) => p.id) });
       safeSend(conn, { type: 'state', state });
     }
+    broadcastState();
+    emit();
     return;
   }
 
@@ -314,7 +562,8 @@ function hostAddPeer(peerId, requestedName) {
   const taken = state.peers.map((p) => p.name);
   const cleaned = cleanName(requestedName);
   const name = (cleaned && !taken.includes(cleaned)) ? cleaned : pickNickname(taken);
-  state.peers.push({ id: peerId, name });
+  state.peers.push({ id: peerId, name, connected: true });
+  lastActive.set(peerId, Date.now());
 
   broadcastDirectory();
   broadcastState();
@@ -498,8 +747,9 @@ function applyAction(action, fromId) {
 function maybeAutoFinish() {
   const state = S();
   if (state.phase !== 'voting') return;
-  const voters = Object.keys(state.votes).length;
-  if (voters >= state.peers.length && state.peers.length > 0) finishVoting();
+  const activePeers = state.peers.filter(p => p.connected !== false);
+  const voters = Object.keys(state.votes).filter(id => activePeers.some(p => p.id === id)).length;
+  if (voters >= activePeers.length && activePeers.length > 0) finishVoting();
 }
 
 function finishVoting() {
@@ -520,6 +770,8 @@ export const actions = {
   cancelVoting: () => dispatch({ type: 'cancelVoting' }),
   reset: () => dispatch({ type: 'reset' }),
   setName: (name) => dispatch({ type: 'setName', name }),
+  startHostingRoom,
+  joinRoom,
 };
 
 export function shareUrl() {

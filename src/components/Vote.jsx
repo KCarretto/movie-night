@@ -5,6 +5,7 @@ import LanguageBadge from '../ui/LanguageBadge.jsx';
 import Poster from '../ui/Poster.jsx';
 import { actions } from '../state/controller.js';
 import { useStore } from '../state/useStore.js';
+import { saveMyVoteOrder, loadMyVoteOrder } from '../lib/storage.js';
 import { DndContext, DragOverlay, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -69,31 +70,42 @@ export default function Vote({ onOpenInfo }) {
 
   useEffect(() => {
     const ids = movies.map((m) => m.id);
-    let seeded = [...myVote.filter((id) => ids.includes(id)), ...ids.filter((id) => !myVote.includes(id))];
+    let seeded = [];
 
-    // Check session storage for saved ranking
-    try {
-      const savedStr = sessionStorage.getItem('movieNightCurrentVoteRanking');
-      if (savedStr) {
-        const saved = JSON.parse(savedStr);
-        // Only use saved if it contains exactly the same ids
-        if (Array.isArray(saved) && saved.length === ids.length && saved.every(id => ids.includes(id))) {
-          seeded = saved;
+    // Load saved vote order from localStorage (keyed by roomId)
+    const savedTitles = loadMyVoteOrder(rt.roomId);
+    if (savedTitles && savedTitles.length > 0) {
+      // Match by title
+      savedTitles.forEach((title) => {
+        const matchingMovie = movies.find((m) => m.title.toLowerCase() === title.toLowerCase());
+        if (matchingMovie && !seeded.includes(matchingMovie.id)) {
+          seeded.push(matchingMovie.id);
         }
-      }
-    } catch (e) {
-      // ignore
+      });
+      // Append any movies that were not in the saved list
+      movies.forEach((m) => {
+        if (!seeded.includes(m.id)) {
+          seeded.push(m.id);
+        }
+      });
+    } else {
+      // Fallback to myVote or default order
+      seeded = [...myVote.filter((id) => ids.includes(id)), ...ids.filter((id) => !myVote.includes(id))];
     }
 
     setRanking(seeded);
-  }, [movieIdsStr, myVoteStr]);
+  }, [movieIdsStr, myVoteStr, rt.roomId]);
 
-  // Save ranking to session storage whenever it changes
+  // Save ranking to localStorage whenever it changes
   useEffect(() => {
-    if (ranking.length > 0) {
-      sessionStorage.setItem('movieNightCurrentVoteRanking', JSON.stringify(ranking));
+    if (ranking.length > 0 && rt.roomId) {
+      // Map movie IDs in ranking to their corresponding titles
+      const orderedTitles = ranking
+        .map((id) => movies.find((m) => m.id === id)?.title)
+        .filter(Boolean);
+      saveMyVoteOrder(rt.roomId, orderedTitles);
     }
-  }, [ranking]);
+  }, [ranking, rt.roomId, movieIdsStr]);
 
   const byId = useMemo(() => new Map(movies.map((m) => [m.id, m])), [movies]);
   const votesIn = Object.keys(rt.state?.votes || {}).length;

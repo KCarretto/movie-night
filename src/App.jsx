@@ -32,6 +32,8 @@ import { markRankingStale, replaceRecommendation } from './lib/recengine.js';
 import { actions, afterTasteChange, boot, shareSeen } from './state/controller.js';
 import { useStore } from './state/useStore.js';
 import { startSyncReceive } from './lib/syncpeer.js';
+import JoinOrHost from './components/JoinOrHost.jsx';
+import { saveMyNominations, loadMyNominations } from './lib/storage.js';
 
 function unionByTitle(listA = [], listB = []) {
   const map = new Map();
@@ -170,6 +172,37 @@ export default function App() {
   }, [rt.state?.phase, rt.state?.results, rt.state?.movies, rt.roomId, savedSig]);
 
   const roomPhase = rt.state?.phase || 'lobby';
+
+  // Persist user's own nominations for the current room ID
+  useEffect(() => {
+    if (!rt.roomId || !rt.myId || !rt.state?.movies) return;
+    const myNominations = rt.state.movies
+      .filter((m) => m.by === rt.myId)
+      .map((m) => ({ title: m.title, tmdbId: m.tmdbId }));
+    saveMyNominations(rt.roomId, myNominations);
+  }, [rt.state?.movies, rt.myId, rt.roomId]);
+
+  // Auto-restore nominations on rejoin (lobby phase)
+  useEffect(() => {
+    if (!rt.roomId || !rt.myId || roomPhase !== 'lobby' || !rt.state?.movies) return;
+    const saved = loadMyNominations(rt.roomId);
+    if (!saved || saved.length === 0) return;
+
+    // Check if any of our saved nominations are missing from active movies list
+    const currentMine = rt.state.movies.filter((m) => m.by === rt.myId);
+    if (currentMine.length >= 3) return; // MAX_NOMINATIONS is 3
+
+    saved.forEach((savedMovie) => {
+      const exists = rt.state.movies.some((m) => m.title.toLowerCase() === savedMovie.title.toLowerCase());
+      if (!exists) {
+        const activeMineCount = rt.state.movies.filter((m) => m.by === rt.myId).length;
+        if (activeMineCount < 3) {
+          console.log(`[NOM] Auto-restoring nomination for: ${savedMovie.title}`);
+          actions.nominate(savedMovie.title, savedMovie.tmdbId);
+        }
+      }
+    });
+  }, [rt.roomId, rt.myId, roomPhase, rt.state?.movies]);
 
   const handleRateSave = (rating) => {
     upsertWatched(rateState.title, rating);
@@ -326,6 +359,21 @@ export default function App() {
     if (rt.movieDbStatus === 'error') return `Movie catalogue failed: ${rt.movieDbError || 'Unknown error'}`;
     return null;
   }, [rt.movieDbStatus, rt.movieDbError]);
+
+  if (!rt.roomId) {
+    return (
+      <div className="min-h-full">
+        <Header showHistory={showHistory} onToggleHistory={setShowHistory} onSettingsAction={onSettingsAction} />
+        <main className="max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-5 space-y-4">
+          <JoinOrHost />
+        </main>
+        <footer className="max-w-6xl mx-auto px-3 sm:px-4 pb-6 text-center text-xs text-slate-400">
+          <div>Serverless P2P over WebRTC · No data leaves your devices except signaling.</div>
+          <div className="mt-1"><b>Version 37{typeof __COMMIT_HASH__ !== 'undefined' && __COMMIT_HASH__ ? ` - ${__COMMIT_HASH__}` : ''}</b></div>
+        </footer>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-full">
