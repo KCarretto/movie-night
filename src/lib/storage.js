@@ -26,10 +26,10 @@ export function saveName(name) {
 const HOST_ROOM_KEY = 'movieNightHostRoom';
 const REC_SESSION_SEEN_KEY = 'movieNightRecSeen';
 export function rememberHostRoom(id) {
-  try { sessionStorage.setItem(HOST_ROOM_KEY, id); } catch (e) { /* ignore */ }
+  try { localStorage.setItem(HOST_ROOM_KEY, id); } catch (e) { /* ignore */ }
 }
 export function recallHostRoom() {
-  try { return sessionStorage.getItem(HOST_ROOM_KEY) || ''; }
+  try { return localStorage.getItem(HOST_ROOM_KEY) || ''; }
   catch (e) { return ''; }
 }
 export function loadSeenRecommendations() {

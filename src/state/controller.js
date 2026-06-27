@@ -160,10 +160,10 @@ function startGuest() {
   runtime.myName = 'Connecting…';
   emit();
 
-  let peerId = sessionStorage.getItem('movieNightGuestId');
+  let peerId = localStorage.getItem('movieNightGuestId');
   if (!peerId) {
     peerId = `peer-${Math.random().toString(36).slice(2, 10)}`;
-    sessionStorage.setItem('movieNightGuestId', peerId);
+    localStorage.setItem('movieNightGuestId', peerId);
   }
 
   peer = new Peer(peerId, { debug: 1 });
