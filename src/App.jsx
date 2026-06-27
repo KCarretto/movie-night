@@ -90,6 +90,7 @@ function updateBackground(state) {
 
   if (phase === 'results' && winnerMeta?.art) {
     el.classList.add('winner');
+    el.style.background = '';
     el.style.backgroundImage = `linear-gradient(180deg, rgba(11,13,18,.28), rgba(11,13,18,.72)), url('${winnerMeta.art}')`;
     el.classList.add('show');
     return;
@@ -101,7 +102,7 @@ function updateBackground(state) {
     .slice(0, 6);
   if (!arts.length) {
     el.classList.remove('show', 'winner');
-    el.style.backgroundImage = 'none';
+    el.style.background = '';
     return;
   }
 
@@ -109,7 +110,7 @@ function updateBackground(state) {
   const layers = arts
     .map((u, i) => `linear-gradient(180deg, rgba(11,13,18,.52), rgba(11,13,18,.75)), url('${u}') ${(i * 17) % 100}% 0 / ${Math.max(16, 26 - i * 2)}% auto repeat-y`)
     .join(', ');
-  el.style.backgroundImage = layers;
+  el.style.background = layers;
   el.classList.add('show');
 }
 
