@@ -30,6 +30,7 @@ let hostCheckInterval = null;
 let lastHostActive = 0;
 let reconnectTimeout = null;
 let isReconnecting = false;
+let pendingHostConn = null;
 
 window.addEventListener('beforeunload', () => {
   try {
@@ -277,8 +278,27 @@ function startGuest() {
 
 function connectToHost() {
   const hostId = `room-${runtime.roomId}-host`;
+  
+  if (pendingHostConn) {
+    console.log(`[NET] Cleaning up previous pending connection attempt to host.`);
+    try { pendingHostConn.close(); } catch (e) {}
+    pendingHostConn = null;
+  }
+
   const conn = peer.connect(hostId, { reliable: true, metadata: { role: 'guest' } });
+  pendingHostConn = conn;
+
+  const connTimeout = setTimeout(() => {
+    if (pendingHostConn === conn && !conn.open) {
+      console.warn(`[NET] Connection attempt to host timed out (8s). Closing WebRTC resources.`);
+      try { conn.close(); } catch (e) {}
+      if (pendingHostConn === conn) pendingHostConn = null;
+    }
+  }, 8000);
+
   setupConnection(conn, () => {
+    clearTimeout(connTimeout);
+    if (pendingHostConn === conn) pendingHostConn = null;
     stopGuestReconnection();
     startGuestHeartbeat();
     safeSend(conn, { type: 'join', name: loadSavedName() });
