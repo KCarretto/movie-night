@@ -447,6 +447,17 @@ function setupConnection(conn, onOpen) {
     if (connections.has(conn.peer) && connections.get(conn.peer) !== conn) {
       const oldConn = connections.get(conn.peer);
       console.log(`Replacing duplicate/reconnection from peer: ${conn.peer}`);
+      try {
+        if (typeof oldConn.off === 'function') {
+          oldConn.off('close');
+          oldConn.off('data');
+          oldConn.off('error');
+        } else if (typeof oldConn.removeAllListeners === 'function') {
+          oldConn.removeAllListeners('close');
+          oldConn.removeAllListeners('data');
+          oldConn.removeAllListeners('error');
+        }
+      } catch (e) {}
       try { oldConn.close(); } catch (e) { /* ignore */ }
     }
     connections.set(conn.peer, conn);
