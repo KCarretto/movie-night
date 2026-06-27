@@ -406,7 +406,7 @@ function schedulePrecompute() {
 export function getRecommendations(options = {}) {
   const forceRefresh = !!options.forceRefresh;
   const sig = recSignature();
-  if (forceRefresh || recCache.sig !== sig) {
+  if (forceRefresh || !recCache.list || recCache.list.length === 0) {
     const profile = buildTasteProfile();
     const pc = ensurePrecompute(sig, profile, forceRefresh);
     const list = pc.batches.length ? pc.batches.shift() : nextRecBatch(pc.ranked, profile);
@@ -416,6 +416,10 @@ export function getRecommendations(options = {}) {
       personalised: list.length > 0 && list[0].personalised,
       totalAvailable: pc.ranked.length,
     };
+    schedulePrecompute();
+  } else if (recCache.sig !== sig) {
+    recRankingStale = true;
+    recCache = { ...recCache, sig };
     schedulePrecompute();
   }
   return recCache;
@@ -427,8 +431,8 @@ export function getRecommendations(options = {}) {
 // detect exhaustion by comparing list lengths.
 export function appendRecommendations() {
   const sig = recSignature();
-  if (recCache.sig !== sig || !Array.isArray(recCache.list)) {
-    return getRecommendations();
+  if (!Array.isArray(recCache.list) || recCache.list.length === 0) {
+    return getRecommendations({ forceRefresh: true });
   }
   const profile = buildTasteProfile();
   const pc = ensurePrecompute(sig, profile);
