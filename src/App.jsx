@@ -420,19 +420,22 @@ export default function App() {
                   <Lobby />
                 </div>
 
-                <div className="grid md:grid-cols-2 gap-4 mt-4 min-w-0">
-                  <div className="space-y-4 flex flex-col min-w-0">
-                    <Recommendations
-                      onOpenRec={(rec) => setRecDetail(rec)}
-                      onOpenInsights={() => setInsightsOpen(true)}
-                      onOpenTrain={() => setTrainOpen(true)}
-                      onOpenRate={openRate}
-                    />
-                  </div>
-                  <div className="space-y-4 flex flex-col min-w-0">
-                    <Nominate onOpenStartVote={() => setStartVoteOpen(true)} />
-                    <MyNominations onOpenInfo={(rec) => setRecDetail({ movie: rec })} />
-                    <RecentlyNominated onOpenInfo={(rec) => setRecDetail({ movie: rec })} />
+                <div className="space-y-4 mt-4">
+                  <Recommendations
+                    onOpenRec={(rec) => setRecDetail(rec)}
+                    onOpenInsights={() => setInsightsOpen(true)}
+                    onOpenTrain={() => setTrainOpen(true)}
+                    onOpenRate={openRate}
+                  />
+
+                  <div className="grid md:grid-cols-2 gap-4 min-w-0">
+                    <div className="space-y-4 flex flex-col min-w-0">
+                      <Nominate onOpenStartVote={() => setStartVoteOpen(true)} />
+                      <MyNominations onOpenInfo={(rec) => setRecDetail({ movie: rec })} />
+                    </div>
+                    <div className="space-y-4 flex flex-col min-w-0">
+                      <RecentlyNominated onOpenInfo={(rec) => setRecDetail({ movie: rec })} />
+                    </div>
                   </div>
                 </div>
               </>

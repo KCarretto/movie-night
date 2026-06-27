@@ -25,6 +25,8 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
   const appendRaf = useRef(0);
   const [embeddingsTimedOut, setEmbeddingsTimedOut] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [calcTrigger, setCalcTrigger] = useState(0);
+  const isRefreshingRef = useRef(false);
 
   // Hold on the skeleton shimmer until embeddings land (or we give up waiting)
   // so the first picks the viewer sees are embedding-powered, not popularity
@@ -56,12 +58,11 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
 
     setIsCalculating(true);
     const t = setTimeout(() => {
-      const result = getRecommendations({ forceRefresh: isRefreshing });
+      const result = getRecommendations({ forceRefresh: isRefreshingRef.current });
       setRecs(result);
       setIsCalculating(false);
-      if (isRefreshing) {
-        setIsRefreshing(false);
-      }
+      isRefreshingRef.current = false;
+      setIsRefreshing(false);
     }, 150);
 
     return () => clearTimeout(t);
@@ -71,7 +72,7 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
     depGenres,
     depLanguages,
     embeddingsPending,
-    isRefreshing
+    calcTrigger
   ]);
 
   const genreOptions = useMemo(() => {
@@ -94,13 +95,17 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
   // Changing a filter rebuilds the carousel from the top rather than appending.
   const applyFilterChange = () => {
     markRankingStale();
+    isRefreshingRef.current = true;
     setIsRefreshing(true);
+    setCalcTrigger((v) => v + 1);
   };
   const setGenres = (next) => { rt.activeSelectedGenres = next; applyFilterChange(); };
   const setLanguages = (next) => { rt.activeSelectedLanguages = next; applyFilterChange(); };
 
   const forceRefresh = () => {
+    isRefreshingRef.current = true;
     setIsRefreshing(true);
+    setCalcTrigger((v) => v + 1);
   };
 
   // Infinite scroll: when the carousel nears its right edge, append the next
