@@ -45,7 +45,20 @@ export function saveSeenRecommendations(seenSet) {
   catch (e) { /* ignore */ }
 }
 
+// ---- Recently Nominated: [title] --------------------------------------------
+export function loadRecentlyNominated() { const v = loadJson(RECENTLY_NOMINATED_KEY, []); return Array.isArray(v) ? v : []; }
+export function addRecentlyNominated(title) {
+  const clean = String(title || '').trim();
+  if (!clean) return;
+  let list = loadRecentlyNominated();
+  list = list.filter((t) => normTitle(t) !== normTitle(clean));
+  list.unshift(clean);
+  if (list.length > 20) list = list.slice(0, 20);
+  saveJson(RECENTLY_NOMINATED_KEY, list);
+}
+
 // ---- Generic JSON store helpers --------------------------------------------
+const RECENTLY_NOMINATED_KEY = 'movieNightRecentlyNominated';
 const HISTORY_KEY = 'movieNightHistory';
 const WATCHED_KEY = 'movieNightWatched';
 const WATCHLIST_KEY = 'movieNightWatchlist';

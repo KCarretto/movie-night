@@ -5,6 +5,7 @@ import Lobby from './components/Lobby.jsx';
 import Recommendations from './components/Recommendations.jsx';
 import Nominate from './components/Nominate.jsx';
 import Vote from './components/Vote.jsx';
+import RecentlyNominated from './components/RecentlyNominated.jsx';
 import Results from './components/Results.jsx';
 import History from './components/History.jsx';
 import StartVoteModal from './modals/StartVoteModal.jsx';
@@ -364,6 +365,7 @@ export default function App() {
                   </div>
                   <div className="space-y-4 flex flex-col min-w-0">
                     <Nominate onOpenStartVote={() => setStartVoteOpen(true)} />
+                    <RecentlyNominated onOpenInfo={(rec) => setRecDetail(rec)} />
                   </div>
                 </div>
               </>
@@ -371,7 +373,7 @@ export default function App() {
 
             {roomPhase === 'voting' && (
               <div className="grid gap-4 min-w-0">
-                <Vote />
+                <Vote onOpenInfo={(rec) => setRecDetail(rec)} />
               </div>
             )}
 

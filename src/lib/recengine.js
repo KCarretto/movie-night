@@ -49,7 +49,12 @@ function qualityScore(m) {
   if (r.imdb != null) { sum += Math.max(0, Math.min(1, r.imdb / 10)); n += 1; }
   if (r.rottenTomatoes != null) { sum += Math.max(0, Math.min(1, r.rottenTomatoes / 100)); n += 1; }
   if (r.letterboxd != null) { sum += Math.max(0, Math.min(1, r.letterboxd / 5)); n += 1; }
-  return n ? sum / n : 0.5;
+
+  let score = n ? sum / n : 0.5;
+  if (score < 0.5) {
+    score *= 0.1; // Assign much lower weight for average rating below 2.5 (0.5 on 0-1 scale)
+  }
+  return score;
 }
 
 // ---------- audience-trust (log-scaled popularity) ----------
