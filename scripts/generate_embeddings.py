@@ -46,9 +46,9 @@ Backends
 --------
 * **Gemini (default)** — pass ``--backend gemini`` (the default; or set
   ``EMBED_BACKEND=gemini``) to use Google's ``gemini-embedding-2`` (3072 dims) via
-  the asynchronous **Batch API** (``client.batches.create_embeddings``), which
-  generates one embedding per movie at higher throughput and lower cost. Requires
-  ``GEMINI_API_KEY`` or ``GOOGLE_API_KEY``.
+  the stable synchronous models API (``client.models.embed_content``), which
+  completely avoids the buggy batch infrastructure. Requires ``GEMINI_API_KEY``
+  or ``GOOGLE_API_KEY``.
 * **Local** — pass ``--backend local`` to use a lightweight Hugging Face
   sentence-transformers model (``sentence-transformers/all-MiniLM-L6-v2``, 384
   dims). Runs entirely offline on CPU, no API key required.
@@ -59,7 +59,7 @@ Usage
 -----
     pip install google-genai protobuf             # gemini backend (default)
     export GEMINI_API_KEY=AIza...
-    python3 scripts/generate_embeddings.py --movies movies.pbf --embeddings embeddings.bin
+    python3 scripts/generate_embeddings.py --movies public/data/movies.pbf --embeddings public/data/embeddings.bin
 
     # or, offline with sentence-transformers:
     pip install sentence-transformers protobuf
@@ -329,25 +329,9 @@ class OpenAIBackend:
 class GeminiBackend:
     """Google Gemini embedding backend. Requires GEMINI_API_KEY or GOOGLE_API_KEY.
 
-    Uses the asynchronous **Batch API** (``client.batches.create_embeddings``)
-    rather than the synchronous ``embed_content`` endpoint. Every movie's text is
-    submitted as one inlined request, the job is polled until it reaches a
-    terminal state, and exactly one embedding vector per movie is returned in the
-    original request order. See
-    https://ai.google.dev/gemini-api/docs/batch-api#batch-embedding.
+    Uses the stable synchronous models.embed_content API with an explicit structural
+    type-wrapping envelope workaround to bypass list aggregation bugs in the SDK.
     """
-
-    # How long to wait between polls of the batch job state.
-    POLL_INTERVAL_SECONDS = 15
-
-    # Batch job states that mean the job is finished (no further polling).
-    _TERMINAL_STATES = {
-        "SUCCEEDED",
-        "FAILED",
-        "CANCELLED",
-        "EXPIRED",
-        "PARTIALLY_SUCCEEDED",
-    }
 
     def __init__(
         self,
@@ -362,104 +346,54 @@ class GeminiBackend:
                 "Neither GEMINI_API_KEY nor GOOGLE_API_KEY is set, but --backend gemini was requested."
             )
         self._client = genai.Client(api_key=api_key.strip())
-        self._model = model_name
+        self._model = model_name if model_name.startswith("models/") else f"models/{model_name}"
         self._progress = progress
 
-    @staticmethod
-    def _job_state(job: Any) -> str:
-        """Return the batch job's state name (e.g. ``RUNNING``)."""
-        state = getattr(job, "state", None)
-        name = getattr(state, "name", str(state))
-        if name.startswith("JOB_STATE_"):
-            name = name[len("JOB_STATE_"):]
-        return name
-
-    def _poll(self, job: Any) -> Any:
-        """Block until the batch job reaches a terminal state, showing progress."""
-        start_time = time.time()
-        last_state = self._job_state(job)
-
-        while self._job_state(job) not in self._TERMINAL_STATES:
-            current_state = self._job_state(job)
-            if current_state != last_state:
-                start_time = time.time()
-                last_state = current_state
-
-            for remaining in range(self.POLL_INTERVAL_SECONDS, 0, -1):
-                if self._progress is not None:
-                    suffix = f"batch {current_state}"
-                    elapsed = time.time() - start_time
-                    if elapsed > 600:
-                        suffix += " (warning: stuck for over 10m)"
-
-                    if getattr(self._progress, "_tty", False):
-                        suffix += f" (polling in {remaining}s)…"
-                    else:
-                        suffix += "…"
-                    self._progress.tick(suffix=suffix)
-                time.sleep(1)
-            job = self._client.batches.get(name=job.name)
-        return job
-
     def embed(self, texts: Sequence[str]) -> List[List[float]]:
-        # Google's gemini-embedding-2 model supports up to 3072 dimensions.
-        # If EMBED_DIM exceeds 3072, we cap the requested dimensionality at 3072
-        # and let pack_vector zero-pad the resulting vectors.
+        from google.genai import types
+
         dim = min(EMBED_DIM, 3072)
         texts = list(texts)
         if not texts:
             return []
 
-        # Submit every movie as one inlined embedding request. The Batch API
-        # processes them asynchronously (cheaper, far higher throughput) and
-        # returns one vector per request in the same order.
-        job = self._client.batches.create_embeddings(
-            model=self._model,
-            src={
-                "inlined_requests": {
-                    "contents": texts,
-                    "config": {"output_dimensionality": dim},
-                }
-            },
-        )
+        # Wrap each text inside explicit types.Content to prevent the 2.x SDK
+        # from merging a standard text string list into 1 combined vector token
+        contents = [types.Content(parts=[types.Part(text=t)]) for t in texts]
 
-        job_name = getattr(job, "name", "unknown")
-        if self._progress is not None:
-            self._progress.tick(suffix=f"batch '{job_name}' submitted ({len(texts)} movies)…")
-        else:
-            print(f"Batch '{job_name}' submitted ({len(texts)} movies)...")
+        retries = 6
+        delay = 10  # Increased base sleep window to clear full RPM blocks smoothly
+        while retries > 0:
+            try:
+                result = self._client.models.embed_content(
+                    model=self._model,
+                    contents=contents,
+                    config=types.ContentConfig(output_dimensionality=dim) if hasattr(types, 'ContentConfig') else None
+                )
 
-        job = self._poll(job)
-        state = self._job_state(job)
-        if state != "SUCCEEDED":
-            error = getattr(job, "error", None)
-            raise RuntimeError(
-                f"Gemini embedding batch job ended in state {state}"
-                + (f": {error}" if error else ".")
-            )
+                if not result.embeddings or len(result.embeddings) != len(texts):
+                    raise RuntimeError(
+                        f"Gemini API returned {len(result.embeddings) if result.embeddings else 0} "
+                        f"vectors for {len(texts)} inputs."
+                    )
 
-        dest = getattr(job, "dest", None)
-        responses = getattr(dest, "inlined_responses", None) or getattr(dest, "inlined_embed_content_responses", None) or []
-        if len(responses) != len(texts):
-            raise RuntimeError(
-                f"Gemini batch returned {len(responses)} responses for {len(texts)} inputs."
-            )
+                return [[float(x) for x in emb.values] for emb in result.embeddings]
 
-        # Responses come back in request order; surface any per-item error.
-        vectors: List[List[float]] = []
-        for i, item in enumerate(responses):
-            if getattr(item, "error", None):
-                raise RuntimeError(f"Gemini batch item {i} failed: {item.error}")
-            embedding = getattr(getattr(item, "response", None), "embedding", None)
-            if embedding is None and hasattr(item, "embeddings"):
-                embeddings = getattr(item, "embeddings", None)
-                if embeddings and len(embeddings) > 0:
-                    embedding = embeddings[0]
-            values = getattr(embedding, "values", None)
-            if values is None:
-                raise RuntimeError(f"Gemini batch item {i} returned no embedding.")
-            vectors.append(list(values))
-        return vectors
+            except Exception as e:
+                # The google-genai SDK maps status identifiers under .code attribute
+                error_code = getattr(e, "code", None)
+                error_msg = str(e).upper()
+
+                is_429 = (error_code == 429) or ("429" in error_msg) or ("RESOURCE_EXHAUSTED" in error_msg)
+
+                if is_429 and retries > 1:
+                    time.sleep(delay)
+                    retries -= 1
+                    delay *= 2
+                else:
+                    raise e
+
+        raise RuntimeError("Failed to complete synchronous embedding generation call after maximum backoff attempts.")
 
 
 def make_backend(name: str, progress: Optional[Progress] = None):
@@ -473,13 +407,7 @@ def make_backend(name: str, progress: Optional[Progress] = None):
 
 
 def load_existing_vectors(path: str) -> List[bytes]:
-    """Read previously computed fixed-size vector records from ``embeddings.bin``.
-
-    Returns a list of ``BYTES_PER_VECTOR``-sized byte records (one per movie, in
-    catalogue order). Because the catalogue is append-only, record ``i`` is the
-    vector for the movie at position ``i``, so unchanged titles can be reused
-    without re-embedding. A missing or malformed file yields an empty list.
-    """
+    """Read previously computed fixed-size vector records from ``embeddings.bin``."""
     if not os.path.exists(path):
         return []
     try:
@@ -493,18 +421,19 @@ def load_existing_vectors(path: str) -> List[bytes]:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--movies", "--input", dest="movies_path", default="movies.pbf",
-                        help="Path to the movies catalogue to read and update (default: movies.pbf).")
-    parser.add_argument("--embeddings", "--output", dest="embeddings_path", default="embeddings.bin",
-                        help="Path to the packed embeddings binary to write (default: embeddings.bin).")
+    parser.add_argument("--movies", "--input", dest="movies_path", default="public/data/movies.pbf",
+                        help="Path to the movies catalogue to read and update (default: public/data/movies.pbf).")
+    parser.add_argument("--embeddings", "--output", dest="embeddings_path", default="public/data/embeddings.bin",
+                        help="Path to the packed embeddings binary to write (default: public/data/embeddings.bin).")
     parser.add_argument("--backend", choices=("local", "openai", "gemini"),
                         default=os.environ.get("EMBED_BACKEND", "gemini"),
                         help="Embedding backend to use (default: gemini).")
     parser.add_argument("--dim", type=int, default=EMBED_DIM,
                         help="Embedding dimensionality and on-disk record size "
                              "(default: %(default)s; also settable via EMBED_DIM env).")
-    parser.add_argument("--batch-size", type=int, default=256,
-                        help="How many movie texts to embed per backend call (default: 256).")
+    # 100 items per request ensures safe payload and text parsing boundaries
+    parser.add_argument("--batch-size", type=int, default=100,
+                        help="How many movie texts to embed per backend call (default: 100).")
     parser.add_argument("--limit", type=int, default=0,
                         help="Optional cap on the number of NEW movies to embed this run (0 = no limit).")
     return parser.parse_args(argv)
@@ -514,16 +443,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = parse_args(argv)
     set_embed_dim(args.dim)
 
+    embeddings_dir = os.path.dirname(args.embeddings_path) or "."
+    if embeddings_dir and embeddings_dir != ".":
+        os.makedirs(embeddings_dir, exist_ok=True)
+
+    movies_dir = os.path.dirname(args.movies_path) or "."
+    if movies_dir and movies_dir != ".":
+        os.makedirs(movies_dir, exist_ok=True)
+
     catalog = catalog_io.load_catalog_proto(args.movies_path)
     movies = catalog.movies
     total = len(movies)
 
-    # Reuse vectors computed on a previous run. The catalogue is append-only, so
-    # record ``i`` of the old binary is the vector for the movie at position ``i``.
     cached = load_existing_vectors(args.embeddings_path)
     cached_count = min(len(cached), total)
 
-    # Movies that still need an embedding are the ones past the cached prefix.
     pending_indices = list(range(cached_count, total))
     if args.limit > 0:
         pending_indices = pending_indices[: args.limit]
@@ -533,6 +467,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"Embedding {len(pending_indices)} of {total} movies via '{args.backend}' backend...")
         progress = Progress("Embedding", total=len(pending_indices))
         backend = make_backend(args.backend, progress=progress)
+
         for start in range(0, len(pending_indices), args.batch_size):
             chunk = pending_indices[start : start + args.batch_size]
             texts = [movie_text(catalog_io.movie_proto_to_dict(movies[i])) for i in chunk]
@@ -544,14 +479,15 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             for idx, vector in zip(chunk, vectors):
                 new_vectors[idx] = pack_vector(vector)
             progress.advance(len(chunk))
+
+            # Tiny cool-off spacing block if executing on Gemini to balance high RPM throughput safely
+            if args.backend == "gemini" and (start + args.batch_size) < len(pending_indices):
+                time.sleep(0.4)
+
         progress.done(suffix="done")
     else:
         print("All movies already have embeddings — nothing to embed.")
 
-    # Assemble the dense, headerless binary in catalogue order and stamp each
-    # movie's sequential ``v_idx`` pointer. We only write vectors we actually
-    # have (cached prefix + freshly embedded), so any movies skipped by --limit
-    # are left out of this pass; a subsequent unlimited run completes them.
     blob = bytearray()
     written = 0
     for i, movie in enumerate(movies):
@@ -560,17 +496,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         elif i in new_vectors:
             record = new_vectors[i]
         else:
-            break  # reached the --limit cut-off; stop the contiguous array here.
+            break
         movie.v_idx = written
         blob.extend(record)
         written += 1
 
-    # Check if the total size exceeds 100MB (100 * 1024 * 1024 bytes)
     max_size = 100 * 1024 * 1024
     total_size = len(blob)
-    embeddings_dir = os.path.dirname(args.embeddings_path) or "."
 
-    # Always clean up any existing part files to avoid leftovers
     if os.path.exists(embeddings_dir):
         for f in os.listdir(embeddings_dir):
             if f.startswith("embeddings_part") and f.endswith(".bin"):
@@ -580,9 +513,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     pass
 
     if total_size > max_size:
-        # Split into chunks of 50MB (50 * 1024 * 1024 bytes)
         chunk_size_bytes = 50 * 1024 * 1024
-        # Align to BYTES_PER_VECTOR to avoid split vectors
         chunk_size = (chunk_size_bytes // BYTES_PER_VECTOR) * BYTES_PER_VECTOR
         if chunk_size == 0:
             chunk_size = BYTES_PER_VECTOR
@@ -599,7 +530,6 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             part_idx += 1
             offset += chunk_size
 
-        # Remove the master file to prevent loading outdated single file
         if os.path.exists(args.embeddings_path):
             try:
                 os.remove(args.embeddings_path)
@@ -614,10 +544,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         print(f"Wrote {args.embeddings_path} with {written} vectors.")
 
     catalog_io.save_catalog_proto(args.movies_path, catalog)
-
-    print(
-        f"Updated {args.movies_path} and completed writing embeddings."
-    )
+    print(f"Updated {args.movies_path} and completed writing embeddings.")
     return 0
 
 
