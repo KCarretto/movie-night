@@ -1,29 +1,68 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import Modal from '../ui/Modal.jsx';
 import Poster from '../ui/Poster.jsx';
 import { useStore } from '../state/useStore.js';
 import { afterTasteChange } from '../state/controller.js';
-import { addToWatchlist, markNotInterested, markNotSure, upsertInterested } from '../lib/storage.js';
-import { getRecommendations, markRankingStale } from '../lib/recengine.js';
+import {
+  addToWatchlist, markNotInterested, markNotSure, upsertInterested,
+  loadWatchlist, loadNotInterested, loadInterested, loadNotSure, loadWatched
+} from '../lib/storage.js';
+import { getRecommendations, markRankingStale, appendRecommendations } from '../lib/recengine.js';
+import { normTitle } from '../lib/format.js';
+import { emit } from '../lib/runtime.js';
 
 export default function TrainModal({ open, onClose, onRate }) {
   const rt = useStore();
-  const [idx, setIdx] = useState(0);
-  const picks = useMemo(() => {
-    // Only build the training set while the modal is actually open. The
-    // component stays mounted, so keying off `open` previously triggered the
-    // expensive recommendation recompute on both open and close — making the
-    // button feel slow to toggle. Reuse the already-precomputed ranking (no
-    // forceRefresh) so opening is instant, and skip all work when closed.
-    if (!open) return [];
-    const base = getRecommendations().list.map((r) => r.movie);
-    if (base.length >= 12) return base.slice(0, 12);
-    const extra = rt.MOVIE_DB.slice(0, 20).filter((m) => m?.art);
-    return [...base, ...extra].slice(0, 12);
-  }, [open, rt.MOVIE_DB.length]);
+  const [sessionReviewed, setSessionReviewed] = useState(new Set());
 
-  const movie = picks[idx] || null;
-  const bump = () => setIdx((n) => (n + 1 >= picks.length ? 0 : n + 1));
+  // Re-calculate the combined skip set on each render to catch fresh storage state
+  const skipSet = useMemo(() => {
+    if (!open) return new Set();
+    const set = new Set(sessionReviewed);
+    loadWatchlist().forEach((w) => set.add(normTitle(w.title)));
+    loadNotInterested().forEach((w) => set.add(normTitle(w.title)));
+    loadInterested().forEach((w) => set.add(normTitle(w.title)));
+    loadNotSure().forEach((w) => set.add(normTitle(w.title)));
+    loadWatched().forEach((w) => set.add(normTitle(w.title)));
+    return set;
+  }, [open, sessionReviewed]);
+
+  const [movie, unreviewedCount] = useMemo(() => {
+    if (!open) return [null, 0];
+
+    // Scan recommendations first
+    const recs = getRecommendations().list.map((r) => r.movie);
+    const unreviewed = recs.filter((m) => !skipSet.has(normTitle(m.title)));
+
+    let first = unreviewed[0];
+    const count = unreviewed.length;
+
+    // If we run out in recommendations, fallback to DB
+    if (!first) {
+      const extra = rt.MOVIE_DB.filter((m) => m?.art && !skipSet.has(normTitle(m.title)));
+      first = extra[0] || null;
+    }
+
+    return [first, count];
+  }, [open, skipSet, rt.MOVIE_DB.length]);
+
+  // Fetch more if we're running low on unreviewed recommendations
+  useEffect(() => {
+    if (open && unreviewedCount < 5) {
+      const before = getRecommendations().list.length;
+      const after = appendRecommendations();
+      if (after.list.length !== before) emit();
+    }
+  }, [open, unreviewedCount]);
+
+  const bump = (title) => {
+    setSessionReviewed((prev) => {
+      const next = new Set(prev);
+      next.add(normTitle(title));
+      return next;
+    });
+  };
+
   const tasteTouch = () => { markRankingStale(); afterTasteChange(); };
 
   return (
@@ -41,14 +80,14 @@ export default function TrainModal({ open, onClose, onRate }) {
             </div>
           </div>
           <div className="grid grid-cols-2 gap-2">
-            <button type="button" className="btn btn-primary px-3 py-2 rounded-lg text-sm text-white" onClick={() => { addToWatchlist(movie.title); tasteTouch(); bump(); }}>Want to watch</button>
-            <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={() => { upsertInterested(movie.title, 4); tasteTouch(); bump(); }}>Interested</button>
-            <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={() => { markNotInterested(movie.title); tasteTouch(); bump(); }}>Not for me</button>
-            <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={() => { markNotSure(movie.title); tasteTouch(); bump(); }}>Not sure</button>
+            <button type="button" className="btn btn-primary px-3 py-2 rounded-lg text-sm text-white" onClick={() => { addToWatchlist(movie.title); tasteTouch(); bump(movie.title); }}>Want to watch</button>
+            <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={() => { upsertInterested(movie.title, 4); tasteTouch(); bump(movie.title); }}>Interested</button>
+            <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={() => { markNotInterested(movie.title); tasteTouch(); bump(movie.title); }}>Not for me</button>
+            <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={() => { markNotSure(movie.title); tasteTouch(); bump(movie.title); }}>Not sure</button>
           </div>
           <div className="grid grid-cols-2 gap-2 pt-1 border-t border-line/50">
-            <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={() => { onRate?.(movie.title); bump(); }}>I’ve seen this</button>
-            <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={bump}>Skip</button>
+            <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={() => { onRate?.(movie.title); bump(movie.title); }}>I’ve seen this</button>
+            <button type="button" className="btn px-3 py-2 rounded-lg border border-line bg-panel2 text-sm" onClick={() => bump(movie.title)}>Skip</button>
           </div>
         </div>
       )}
