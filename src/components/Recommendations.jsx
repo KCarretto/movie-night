@@ -43,7 +43,36 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
   useEffect(() => () => { if (appendRaf.current) cancelAnimationFrame(appendRaf.current); }, []);
 
   const dataStatus = recommendationDataStatus();
-  const recs = embeddingsPending ? { list: [], personalised: false, totalAvailable: 0 } : getRecommendations();
+  const [recs, setRecs] = useState({ list: [], personalised: false, totalAvailable: 0 });
+  const [isCalculating, setIsCalculating] = useState(false);
+
+  const depMovies = rt.state?.movies;
+  const depVectors = rt.state?.peerVectors;
+  const depGenres = rt.activeSelectedGenres;
+  const depLanguages = rt.activeSelectedLanguages;
+
+  useEffect(() => {
+    if (embeddingsPending) return;
+
+    setIsCalculating(true);
+    const t = setTimeout(() => {
+      const result = getRecommendations({ forceRefresh: isRefreshing });
+      setRecs(result);
+      setIsCalculating(false);
+      if (isRefreshing) {
+        setIsRefreshing(false);
+      }
+    }, 150);
+
+    return () => clearTimeout(t);
+  }, [
+    depMovies,
+    depVectors,
+    depGenres,
+    depLanguages,
+    embeddingsPending,
+    isRefreshing
+  ]);
 
   const genreOptions = useMemo(() => {
     const s = new Set();
@@ -65,31 +94,27 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
   // Changing a filter rebuilds the carousel from the top rather than appending.
   const applyFilterChange = () => {
     markRankingStale();
-    getRecommendations({ forceRefresh: true });
-    emit();
+    setIsRefreshing(true);
   };
   const setGenres = (next) => { rt.activeSelectedGenres = next; applyFilterChange(); };
   const setLanguages = (next) => { rt.activeSelectedLanguages = next; applyFilterChange(); };
 
   const forceRefresh = () => {
     setIsRefreshing(true);
-    setTimeout(() => {
-      getRecommendations({ forceRefresh: true });
-      emit();
-      setIsRefreshing(false);
-    }, 300);
   };
 
   // Infinite scroll: when the carousel nears its right edge, append the next
   // batch of recommendations so it keeps loading more as the user scrolls.
   const maybeAppend = () => {
     const el = trackRef.current;
-    if (!el || shimmer) return;
+    if (!el || shimmer || isCalculating) return;
     const remaining = el.scrollWidth - el.scrollLeft - el.clientWidth;
     if (remaining > 320) return;
-    const before = getRecommendations().list.length;
+    const before = recs.list.length;
     const after = appendRecommendations();
-    if (after.list.length !== before) emit();
+    if (after.list.length !== before) {
+      setRecs(prev => ({ ...prev, list: after.list, totalAvailable: after.totalAvailable }));
+    }
   };
 
   const onTrackScroll = () => {
@@ -126,7 +151,7 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
   const onNotInterested = (m) => { markNotInterested(m.title); replaceRecommendation(m.title); afterTasteChange(); };
   const onWatched = (m) => onOpenRate?.(m.title);
 
-  const shimmer = embeddingsPending || isRefreshing;
+  const shimmer = embeddingsPending || isRefreshing || isCalculating;
 
   return (
     <section className="card p-4 sm:p-5 min-w-0">

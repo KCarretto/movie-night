@@ -6,7 +6,7 @@ import Poster from '../ui/Poster.jsx';
 import { actions } from '../state/controller.js';
 import { useStore } from '../state/useStore.js';
 import { saveMyVoteOrder, loadMyVoteOrder } from '../lib/storage.js';
-import { DndContext, DragOverlay, closestCenter, PointerSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { DndContext, DragOverlay, closestCenter, MouseSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
@@ -71,7 +71,7 @@ export default function Vote({ onOpenInfo }) {
   const [activeId, setActiveId] = useState(null);
 
   const sensors = useSensors(
-    useSensor(PointerSensor, {
+    useSensor(MouseSensor, {
       activationConstraint: {
         distance: 8,
       },
@@ -96,7 +96,7 @@ export default function Vote({ onOpenInfo }) {
     if (savedTitles && savedTitles.length > 0) {
       // Match by title
       savedTitles.forEach((title) => {
-        const matchingMovie = movies.find((m) => m.title.toLowerCase() === title.toLowerCase());
+        const matchingMovie = movies.find((m) => m.title && title && m.title.toLowerCase() === title.toLowerCase());
         if (matchingMovie && !seeded.includes(matchingMovie.id)) {
           seeded.push(matchingMovie.id);
         }

@@ -17,7 +17,7 @@ export default function RecentlyNominated({ onOpenInfo }) {
 
   const recent = useMemo(() => {
     return loadRecentlyNominated().map(title => movieMeta(title)).filter(Boolean).slice(0, 15);
-  }, [rt.state?.movies]); // Re-compute if movies change (could be after a nomination)
+  }, [rt.state?.movies, rt.movieDbStatus]); // Re-compute if movies change or database finishes loading
 
   return (
     <section className="card p-4 sm:p-5">
@@ -31,7 +31,7 @@ export default function RecentlyNominated({ onOpenInfo }) {
       ) : (
         <div className="flex overflow-x-auto gap-3 pb-2 -mx-2 px-2 snap-x">
           {recent.map((meta, idx) => {
-            const isNominated = movies.some(m => m.title.toLowerCase() === meta.title.toLowerCase());
+            const isNominated = movies.some(m => m.title && meta.title && m.title.toLowerCase() === meta.title.toLowerCase());
             return (
               <div key={meta.id || idx} className="w-32 flex-none snap-start relative group">
                 <Poster movie={meta} className="w-32 h-48 rounded-lg shadow-md cursor-pointer" onClick={() => onOpenInfo(meta)} />

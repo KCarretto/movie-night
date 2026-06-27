@@ -205,7 +205,8 @@ export default function App() {
     if (currentMine.length >= 3) return; // MAX_NOMINATIONS is 3
 
     saved.forEach((savedMovie) => {
-      const exists = rt.state.movies.some((m) => m.title.toLowerCase() === savedMovie.title.toLowerCase());
+      if (!savedMovie?.title) return;
+      const exists = rt.state.movies.some((m) => m.title && m.title.toLowerCase() === savedMovie.title.toLowerCase());
       if (!exists) {
         const activeMineCount = rt.state.movies.filter((m) => m.by === rt.myId).length;
         if (activeMineCount < 3) {
@@ -226,7 +227,7 @@ export default function App() {
   };
 
   const openRate = (title) => {
-    const w = loadWatched().find((x) => x.title.toLowerCase() === String(title).toLowerCase());
+    const w = loadWatched().find((x) => x?.title && x.title.toLowerCase() === String(title).toLowerCase());
     setRateState({ open: true, title, initial: w?.rating || 0 });
   };
 
@@ -288,7 +289,7 @@ export default function App() {
       const ratingRaw = Number(cols[ratingIdx]);
       const rating = Number.isFinite(ratingRaw) ? Math.max(0, Math.min(5, ratingRaw / 2)) : 0;
       const watchedAt = dateIdx >= 0 && cols[dateIdx] ? Date.parse(cols[dateIdx]) : Date.now();
-      const existing = watched.find((w) => w.title.toLowerCase() === title.toLowerCase());
+      const existing = watched.find((w) => w?.title && w.title.toLowerCase() === title.toLowerCase());
       if (existing) {
         existing.rating = rating || existing.rating || 0;
         existing.watchedAt = Number.isFinite(watchedAt) ? watchedAt : existing.watchedAt;

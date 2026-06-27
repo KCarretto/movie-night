@@ -134,10 +134,10 @@ export default function History() {
   }, [sort, tick]);
 
   const query = q.trim().toLowerCase();
-  const watchedFiltered = watched.filter((w) => !query || w.title.toLowerCase().includes(query));
+  const watchedFiltered = watched.filter((w) => !query || (w?.title && w.title.toLowerCase().includes(query)));
 
   const removeWatched = (title) => {
-    const next = loadWatched().filter((w) => w.title.toLowerCase() !== title.toLowerCase());
+    const next = loadWatched().filter((w) => w?.title && title && w.title.toLowerCase() !== title.toLowerCase());
     saveWatched(next);
     markRankingStale();
     shareSeen();
