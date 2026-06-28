@@ -3,17 +3,18 @@ import { movieMeta } from '../lib/catalog.js';
 import GenreTags from '../ui/GenreTags.jsx';
 import LanguageBadge from '../ui/LanguageBadge.jsx';
 import Poster from '../ui/Poster.jsx';
-import { actions } from '../state/controller.js';
+import { actions, afterTasteChange } from '../state/controller.js';
 import { useStore } from '../state/useStore.js';
-import { saveMyVoteOrder, loadMyVoteOrder } from '../lib/storage.js';
+import { saveMyVoteOrder, loadMyVoteOrder, inWatchlist, addToWatchlist, removeFromWatchlist } from '../lib/storage.js';
 import { DndContext, DragOverlay, closestCenter, MouseSensor, TouchSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { arrayMove, SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 
 function SortableItemContent({ movie, meta, index, onOpenInfo }) {
+  const inWl = inWatchlist(movie.title);
+
   return (
     <div className="flex items-start gap-2">
-
       <div className="text-xs text-slate-400 mt-1">#{index + 1}</div>
       <Poster movie={meta || movie} className="w-10 h-14 rounded flex-none" />
       <div className="min-w-0 flex-1">
@@ -23,15 +24,47 @@ function SortableItemContent({ movie, meta, index, onOpenInfo }) {
           {meta && <LanguageBadge movie={meta} />}
         </div>
       </div>
-      {meta && (
+      <div className="flex items-center gap-1.5 flex-none self-start">
         <button
           type="button"
-          className="text-slate-400 hover:text-white p-2"
-          onClick={(e) => { e.preventDefault(); e.stopPropagation(); onOpenInfo(meta); }}
+          className={`p-2 rounded-lg transition-colors ${
+            inWl
+              ? 'text-emerald-400 hover:text-emerald-300 bg-emerald-500/10'
+              : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+          }`}
+          title={inWl ? 'Remove from Watchlist' : 'Add to Watchlist'}
+          aria-label={inWl ? 'Remove from Watchlist' : 'Add to Watchlist'}
+          onPointerDown={(e) => e.stopPropagation()}
+          onMouseDown={(e) => e.stopPropagation()}
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (inWl) {
+              removeFromWatchlist(movie.title);
+            } else {
+              addToWatchlist(movie.title);
+            }
+            afterTasteChange();
+          }}
         >
-          <i className="fa-solid fa-circle-info" />
+          <i className={`${inWl ? 'fa-solid' : 'fa-regular'} fa-bookmark`} />
         </button>
-      )}
+        {meta && (
+          <button
+            type="button"
+            className="text-slate-400 hover:text-white p-2"
+            onPointerDown={(e) => e.stopPropagation()}
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              onOpenInfo(meta);
+            }}
+          >
+            <i className="fa-solid fa-circle-info" />
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -42,16 +75,16 @@ function SortableItem({ id, movie, meta, index, onOpenInfo }) {
     transform: CSS.Translate.toString(transform),
     transition,
     opacity: isDragging ? 0.3 : 1,
+    touchAction: 'none',
   };
 
   return (
     <div
       ref={setNodeRef}
-      style={style}
       {...attributes}
       {...listeners}
       className="rank-row rounded-lg border border-line bg-panel2 p-2.5 flex items-center cursor-grab active:cursor-grabbing hover:border-slate-500 transition-colors"
-      style={{ ...style, touchAction: 'none' }}
+      style={style}
     >
       <div className="drag-handle text-slate-500 mr-2 p-1">
         <i className="fa-solid fa-grip-vertical" />

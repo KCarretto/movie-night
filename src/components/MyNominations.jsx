@@ -3,8 +3,9 @@ import { movieMeta } from '../lib/catalog.js';
 import Poster from '../ui/Poster.jsx';
 import GenreTags from '../ui/GenreTags.jsx';
 import LanguageBadge from '../ui/LanguageBadge.jsx';
-import { actions } from '../state/controller.js';
+import { actions, afterTasteChange } from '../state/controller.js';
 import { useStore } from '../state/useStore.js';
+import { inWatchlist, addToWatchlist, removeFromWatchlist } from '../lib/storage.js';
 
 export default function MyNominations({ onOpenInfo }) {
   const rt = useStore();
@@ -29,6 +30,7 @@ export default function MyNominations({ onOpenInfo }) {
         <div className="space-y-2.5">
           {myNominations.map((m, i) => {
             const meta = movieMeta(m.title, m.tmdbId);
+            const inWl = inWatchlist(m.title);
             return (
               <div key={m.id} className="rounded-lg border border-line bg-panel2 p-2.5">
                 <div className="flex items-start gap-2">
@@ -41,16 +43,38 @@ export default function MyNominations({ onOpenInfo }) {
                       {meta ? <LanguageBadge movie={meta} /> : null}
                     </div>
                   </div>
-                  {rt.state?.phase === 'lobby' && (
+                  <div className="flex items-center gap-1.5 flex-none self-start">
                     <button
                       type="button"
-                      className="text-slate-400 hover:text-rose-300 p-1"
-                      aria-label="Remove nomination"
-                      onClick={() => actions.removeNomination(m.id)}
+                      className={`p-1 rounded-lg transition-colors ${
+                        inWl
+                          ? 'text-emerald-400 hover:text-emerald-300 bg-emerald-500/10'
+                          : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                      }`}
+                      title={inWl ? 'Remove from Watchlist' : 'Add to Watchlist'}
+                      aria-label={inWl ? 'Remove from Watchlist' : 'Add to Watchlist'}
+                      onClick={() => {
+                        if (inWl) {
+                          removeFromWatchlist(m.title);
+                        } else {
+                          addToWatchlist(m.title);
+                        }
+                        afterTasteChange();
+                      }}
                     >
-                      <i className="fa-solid fa-trash text-xs" />
+                      <i className={`${inWl ? 'fa-solid' : 'fa-regular'} fa-bookmark text-xs`} />
                     </button>
-                  )}
+                    {rt.state?.phase === 'lobby' && (
+                      <button
+                        type="button"
+                        className="text-slate-400 hover:text-rose-300 p-1"
+                        aria-label="Remove nomination"
+                        onClick={() => actions.removeNomination(m.id)}
+                      >
+                        <i className="fa-solid fa-trash text-xs" />
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             );

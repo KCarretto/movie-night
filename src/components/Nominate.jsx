@@ -1,13 +1,13 @@
 import { useMemo, useState } from 'react';
 import { MAX_NOMINATIONS } from '../lib/constants.js';
 import { movieMeta } from '../lib/catalog.js';
-import { addRecentlyNominated } from '../lib/storage.js';
+import { addRecentlyNominated, inWatchlist, addToWatchlist, removeFromWatchlist } from '../lib/storage.js';
 import GenreTags from '../ui/GenreTags.jsx';
 import LanguageBadge from '../ui/LanguageBadge.jsx';
 import SeenIndicator from '../ui/SeenIndicator.jsx';
 import Poster from '../ui/Poster.jsx';
 import Typeahead from './Typeahead.jsx';
-import { actions } from '../state/controller.js';
+import { actions, afterTasteChange } from '../state/controller.js';
 import { useStore } from '../state/useStore.js';
 
 export default function Nominate({ onOpenStartVote }) {
@@ -57,6 +57,7 @@ export default function Nominate({ onOpenStartVote }) {
       <div className="space-y-2.5">
         {movies.map((m, i) => {
           const meta = movieMeta(m.title, m.tmdbId);
+          const inWl = inWatchlist(m.title);
           return (
             <div key={m.id} className="rounded-lg border border-line bg-panel2 p-2.5">
               <div className="flex items-start gap-2">
@@ -71,16 +72,38 @@ export default function Nominate({ onOpenStartVote }) {
                     <SeenIndicator title={m.title} />
                   </div>
                 </div>
-                {m.by === myId && rt.state?.phase === 'lobby' && (
+                <div className="flex items-center gap-1.5 flex-none self-start">
                   <button
                     type="button"
-                    className="text-slate-400 hover:text-rose-300"
-                    aria-label="Remove nomination"
-                    onClick={() => actions.removeNomination(m.id)}
+                    className={`p-1.5 rounded-lg transition-colors ${
+                      inWl
+                        ? 'text-emerald-400 hover:text-emerald-300 bg-emerald-500/10'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-white/5'
+                    }`}
+                    title={inWl ? 'Remove from Watchlist' : 'Add to Watchlist'}
+                    aria-label={inWl ? 'Remove from Watchlist' : 'Add to Watchlist'}
+                    onClick={() => {
+                      if (inWl) {
+                        removeFromWatchlist(m.title);
+                      } else {
+                        addToWatchlist(m.title);
+                      }
+                      afterTasteChange();
+                    }}
                   >
-                    <i className="fa-solid fa-trash" />
+                    <i className={`${inWl ? 'fa-solid' : 'fa-regular'} fa-bookmark`} />
                   </button>
-                )}
+                  {m.by === myId && rt.state?.phase === 'lobby' && (
+                    <button
+                      type="button"
+                      className="p-1.5 text-slate-400 hover:text-rose-300"
+                      aria-label="Remove nomination"
+                      onClick={() => actions.removeNomination(m.id)}
+                    >
+                      <i className="fa-solid fa-trash" />
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           );
