@@ -17,8 +17,104 @@ import {
   cleanExpiredSessions
 } from '../lib/storage.js';
 import { loadMovieDb, movieMeta } from '../lib/catalog.js';
-import { computeMyCentroids } from '../lib/recengine.js';
+import { buildLocalProfile, markRankingStale } from '../lib/recengine.js';
+import { UserNetworkProfile } from '../lib/recommendation.js';
 import { instantRunoff } from '../lib/irv.js';
+
+const connectionMap = new WeakMap();
+
+// Intercept incoming binary RTCDataChannel message events globally
+if (typeof window !== 'undefined' && window.RTCDataChannel) {
+  const originalAddEventListener = RTCDataChannel.prototype.addEventListener;
+  RTCDataChannel.prototype.addEventListener = function (type, listener, options) {
+    if (type === 'message') {
+      const channel = this;
+      const wrappedListener = function (event) {
+        if (event.data instanceof ArrayBuffer) {
+          const view = new Uint8Array(event.data);
+          if (view.length >= 4 &&
+              view[0] === 0x50 && // 'P'
+              view[1] === 0x4f && // 'O'
+              view[2] === 0x4c && // 'L'
+              view[3] === 0x4c)   // 'L'
+          {
+            const conn = connectionMap.get(channel);
+            if (conn) {
+              handleBinaryMessage(conn, event.data.slice(4));
+              return; // Intercept our custom protobuf packets
+            }
+          }
+        }
+        listener.apply(this, arguments);
+      };
+      return originalAddEventListener.call(this, type, wrappedListener, options);
+    }
+    return originalAddEventListener.apply(this, arguments);
+  };
+
+  const originalOnMessageDescriptor = Object.getOwnPropertyDescriptor(RTCDataChannel.prototype, 'onmessage');
+  Object.defineProperty(RTCDataChannel.prototype, 'onmessage', {
+    set(listener) {
+      const channel = this;
+      const wrappedListener = function (event) {
+        if (event.data instanceof ArrayBuffer) {
+          const view = new Uint8Array(event.data);
+          if (view.length >= 4 &&
+              view[0] === 0x50 &&
+              view[1] === 0x4f &&
+              view[2] === 0x4c &&
+              view[3] === 0x4c) {
+            const conn = connectionMap.get(channel);
+            if (conn) {
+              handleBinaryMessage(conn, event.data.slice(4));
+              return; // Intercept
+            }
+          }
+        }
+        if (listener) listener.apply(this, arguments);
+      };
+      if (originalOnMessageDescriptor && originalOnMessageDescriptor.set) {
+        originalOnMessageDescriptor.set.call(this, wrappedListener);
+      } else {
+        this._wrappedOnMessage = wrappedListener;
+      }
+    },
+    get() {
+      if (originalOnMessageDescriptor && originalOnMessageDescriptor.get) {
+        return originalOnMessageDescriptor.get.call(this);
+      }
+      return this._wrappedOnMessage;
+    }
+  });
+}
+
+function serializeProfileWithPrefix(profile) {
+  const bytes = UserNetworkProfile.serialize(profile);
+  const payload = new Uint8Array(4 + bytes.byteLength);
+  payload[0] = 0x50;
+  payload[1] = 0x4f;
+  payload[2] = 0x4c;
+  payload[3] = 0x4c;
+  payload.set(bytes, 4);
+  return payload.buffer;
+}
+
+function handleBinaryMessage(conn, buffer) {
+  try {
+    const profile = UserNetworkProfile.deserialize(new Uint8Array(buffer));
+    console.log('[NET] Decoded binary UserNetworkProfile from:', conn.peer, profile);
+    if (!profile || !profile.userId) return;
+
+    if (!runtime.peerProfiles) runtime.peerProfiles = {};
+    runtime.peerProfiles[profile.userId] = profile;
+
+    markRankingStale();
+    runtime.hasPendingGroupUpdates = true;
+    emit();
+  } catch (e) {
+    console.warn('[NET] Error parsing incoming binary profile:', e);
+  }
+}
 
 let peer = null; // PeerJS instance
 const connections = new Map(); // peerId -> DataConnection (open)
@@ -108,24 +204,45 @@ function handlePeerError(err) {
 // can score candidates against the whole room's taste. Kept OUT of the render
 // path to avoid re-entrant renders.
 export function myTasteVector() {
-  const c = computeMyCentroids();
-  return (c && c.length) ? c : [];
+  return [];
 }
 export function shareVector() {
-  dispatch({ type: 'setVector', vector: myTasteVector() });
+  // no-op under new binary sync
 }
 export function shareSeen() {
   setTimeout(() => {
-    dispatch({ type: 'setSeen', seen: mySeenShare() });
-    shareVector();
+    broadcastProfile();
     emit();
   }, 0);
 }
 // Re-share taste + re-render after any taste-shaping change (rating, watchlist,
 // training). Recommendations re-rank on the next render via recSignature().
+export function broadcastProfile() {
+  try {
+    const localProfile = buildLocalProfile();
+    if (!runtime.peerProfiles) runtime.peerProfiles = {};
+    runtime.peerProfiles[runtime.myId || 'local'] = localProfile;
+
+    const bufferWithPrefix = serializeProfileWithPrefix(localProfile);
+
+    connections.forEach((conn) => {
+      if (conn && conn.open && conn.dataChannel) {
+        try {
+          conn.dataChannel.send(bufferWithPrefix);
+          console.log('[NET] Sent binary profile to peer:', conn.peer);
+        } catch (err) {
+          console.warn('[NET] Failed to send binary profile to:', conn.peer, err);
+        }
+      }
+    });
+  } catch (e) {
+    console.warn('[NET] Failed to construct or serialize local profile:', e);
+  }
+}
+
 export function afterTasteChange() {
   setTimeout(() => {
-    shareVector();
+    broadcastProfile();
     emit();
   }, 0);
 }
@@ -465,6 +582,18 @@ function stopGuestReconnection() {
 //  CONNECTION PLUMBING (shared by host + guest, with dup guards)
 // ======================================================================
 function setupConnection(conn, onOpen) {
+  if (conn.dataChannel) {
+    connectionMap.set(conn.dataChannel, conn);
+    conn.dataChannel.binaryType = 'arraybuffer';
+  } else {
+    conn.on('open', () => {
+      if (conn.dataChannel) {
+        connectionMap.set(conn.dataChannel, conn);
+        conn.dataChannel.binaryType = 'arraybuffer';
+      }
+    });
+  }
+
   conn.on('open', () => {
     if (connections.has(conn.peer) && connections.get(conn.peer) !== conn) {
       const oldConn = connections.get(conn.peer);
@@ -483,6 +612,23 @@ function setupConnection(conn, onOpen) {
       try { oldConn.close(); } catch (e) { /* ignore */ }
     }
     connections.set(conn.peer, conn);
+    
+    // Set map and binaryType on open if not set earlier
+    if (conn.dataChannel) {
+      connectionMap.set(conn.dataChannel, conn);
+      conn.dataChannel.binaryType = 'arraybuffer';
+      
+      // Share local profile binary data immediately upon connection open
+      try {
+        const localProfile = buildLocalProfile();
+        const bufferWithPrefix = serializeProfileWithPrefix(localProfile);
+        conn.dataChannel.send(bufferWithPrefix);
+        console.log('[NET] Shared local profile with newly connected peer:', conn.peer);
+      } catch (err) {
+        console.warn('[NET] Failed to send local profile on open:', err);
+      }
+    }
+
     if (runtime.isHost) {
       lastActive.set(conn.peer, Date.now());
       const existingPeer = S().peers.find(p => p.id === conn.peer);
@@ -643,6 +789,7 @@ function removePeer(peerId) {
   delete state.votes[peerId];
   if (state.seen) delete state.seen[peerId];
   if (state.peerVectors) delete state.peerVectors[peerId];
+  if (runtime.peerProfiles) delete runtime.peerProfiles[peerId];
   if (state.peers.length !== before) {
     broadcastDirectory();
     maybeAutoFinish();
@@ -860,6 +1007,8 @@ export function deleteRoom() {
   runtime.roomId = null;
   runtime.isHost = false;
   runtime.myName = '';
+  runtime.peerProfiles = {};
+  runtime.hasPendingGroupUpdates = false;
   runtime.state = {
     phase: 'lobby',
     peers: [],
@@ -909,6 +1058,8 @@ function handleRoomDeleted() {
   runtime.roomId = null;
   runtime.isHost = false;
   runtime.myName = '';
+  runtime.peerProfiles = {};
+  runtime.hasPendingGroupUpdates = false;
   runtime.state = {
     phase: 'lobby',
     peers: [],

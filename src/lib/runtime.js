@@ -64,6 +64,7 @@ export function getSnapshot() {
 // renderAll() equivalent: notify every subscriber that runtime changed.
 export function emit() {
   version += 1;
+  runtime.version = version;
   listeners.forEach((fn) => {
     try { fn(); } catch (e) { /* a bad listener shouldn't break the bus */ }
   });

@@ -31,9 +31,9 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
   // Hold on the skeleton shimmer until embeddings land (or we give up waiting)
   // so the first picks the viewer sees are embedding-powered, not popularity
   // placeholders. Mirrors the original single-file app's first-load behaviour.
-  const embeddingsPending = !rt.EMBEDDINGS_BUFFER
-    && rt.embeddingsStatus !== 'error'
-    && rt.embeddingsStatus !== 'idle'
+  const embeddingsPending = !rt.recommendationManifest
+    && rt.recommendationStatus !== 'error'
+    && rt.recommendationStatus !== 'idle'
     && !embeddingsTimedOut;
 
   useEffect(() => {
@@ -199,6 +199,28 @@ export default function Recommendations({ onOpenRec, onOpenInsights, onOpenTrain
           onChange={setLanguages}
         />
       </div>
+
+      {rt.hasPendingGroupUpdates && (
+        <div className="mb-3 px-3.5 py-2.5 bg-indigo-500/10 border border-indigo-500/20 rounded-xl text-xs text-indigo-300 flex items-center justify-between">
+          <span className="flex items-center gap-2">
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+            </span>
+            Group taste updated. Refresh to re-score recommendations.
+          </span>
+          <button 
+            type="button" 
+            className="btn px-2.5 py-1 rounded-lg text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-700 border-0 cursor-pointer" 
+            onClick={() => {
+              rt.hasPendingGroupUpdates = false;
+              forceRefresh();
+            }}
+          >
+            Refresh
+          </button>
+        </div>
+      )}
 
       <div className="relative">
         <button type="button" className="rec-nav rec-prev" onClick={() => trackRef.current?.scrollBy({ left: -280, behavior: 'smooth' })} aria-label="Previous recommendations">

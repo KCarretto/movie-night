@@ -294,7 +294,7 @@ export default function App() {
       const title = cols[titleIdx];
       if (!title) continue;
       const ratingRaw = Number(cols[ratingIdx]);
-      const rating = Number.isFinite(ratingRaw) ? Math.max(0, Math.min(5, ratingRaw / 2)) : 0;
+      const rating = Number.isFinite(ratingRaw) ? Math.max(0, Math.min(5, ratingRaw)) : 0;
       const watchedAt = dateIdx >= 0 && cols[dateIdx] ? Date.parse(cols[dateIdx]) : Date.now();
       const existing = watched.find((w) => w?.title && w.title.toLowerCase() === title.toLowerCase());
       if (existing) {

@@ -1,314 +1,378 @@
-import { useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import Modal from '../ui/Modal.jsx';
-import Poster from '../ui/Poster.jsx';
 import { runtime } from '../lib/runtime.js';
-import { buildTasteProfile, getRecCache } from '../lib/recengine.js';
-import { movieEmbedding } from '../lib/embeddings.js';
-import { movieMeta } from '../lib/catalog.js';
-import { isVector, normTitle } from '../lib/format.js';
-import { nearestCentroid, pca2d } from '../lib/vector.js';
+import { buildTasteProfile, getRecCache, getCandidates, roomSeenTitles } from '../lib/recengine.js';
+import { normTitle } from '../lib/format.js';
+import { loadNotInterested } from '../lib/storage.js';
 
-const INSIGHT_COLORS = ['#7c5cff', '#22d3ee', '#f472b6', '#facc15', '#34d399',
-  '#fb923c', '#60a5fa', '#a3e635'];
-const colorAt = (i) => INSIGHT_COLORS[i % INSIGHT_COLORS.length];
-
-const VIEW_W = 620;
-const VIEW_H = 400;
-const PAD = 40;
-
-// Project `centroids` + `points` into one shared 2-D frame and build the SVG
-// node/line/legend model for a single taste map. Mirrors the original
-// single-file app's buildClusterMap so the visualisation matches.
-function buildClusterMap(centroids, points, mode) {
-  const vectors = [];
-  centroids.forEach((c) => vectors.push(Array.from(c)));
-  points.forEach((p) => vectors.push(Array.from(p.emb)));
-  const coords = pca2d(vectors);
-  const nc = centroids.length;
-  const centroidPts = coords.slice(0, nc);
-  const pointPts = coords.slice(nc);
-
-  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  coords.forEach(([x, y]) => {
-    if (x < minX) minX = x; if (x > maxX) maxX = x;
-    if (y < minY) minY = y; if (y > maxY) maxY = y;
-  });
-  const degenX = maxX - minX < 1e-9;
-  const degenY = maxY - minY < 1e-9;
-  const spanX = degenX ? 1 : maxX - minX;
-  const spanY = degenY ? 1 : maxY - minY;
-  const sx = (x) => (degenX ? VIEW_W / 2 : PAD + ((x - minX) / spanX) * (VIEW_W - 2 * PAD));
-  const sy = (y) => (degenY ? VIEW_H / 2 : PAD + ((y - minY) / spanY) * (VIEW_H - 2 * PAD));
-
-  const lines = [];
-  const movieNodes = [];
-  const centroidNodes = [];
-  const stats = centroids.map(() => ({ liked: 0, recs: 0, members: 0, top: null, topSim: -Infinity }));
-
-  points.forEach((p, i) => {
-    const { index, sim } = nearestCentroid(p.emb, centroids);
-    if (index < 0) return;
-    const px = sx(pointPts[i][0]);
-    const py = sy(pointPts[i][1]);
-    const cx = sx(centroidPts[index][0]);
-    const cy = sy(centroidPts[index][1]);
-    const c = colorAt(index);
-    const st = stats[index];
-    if (p.kind === 'rec') {
-      lines.push({ x1: px, y1: py, x2: cx, y2: cy, stroke: c, opacity: 0.12, dash: '2 3' });
-      movieNodes.push({
-        px, py, r: 5, fill: '#0b1020', stroke: c, sw: 2,
-        title: p.title, info: `Cluster ${index + 1} · Match ${sim.toFixed(2)}`,
-      });
-      st.recs += 1;
-    } else if (p.kind === 'member') {
-      lines.push({ x1: px, y1: py, x2: cx, y2: cy, stroke: c, opacity: 0.18 });
-      movieNodes.push({
-        px, py, r: 4, fill: c, fillOpacity: 0.7,
-        plain: `Cluster ${index + 1} · a room member's taste`,
-      });
-      st.members += 1;
-    } else {
-      lines.push({ x1: px, y1: py, x2: cx, y2: cy, stroke: c, opacity: 0.18 });
-      movieNodes.push({
-        px, py, r: 4.5, fill: c, fillOpacity: 0.85,
-        title: p.title, info: `Cluster ${index + 1} · Liked (match ${sim.toFixed(2)})`,
-      });
-      st.liked += 1;
-      if (sim > st.topSim) { st.topSim = sim; st.top = p.title; }
-    }
-  });
-
-  centroids.forEach((c, i) => {
-    const cx = sx(centroidPts[i][0]);
-    const cy = sy(centroidPts[i][1]);
-    const r = 9;
-    centroidNodes.push({
-      pts: `${cx},${cy - r} ${cx + r},${cy} ${cx},${cy + r} ${cx - r},${cy}`,
-      fill: colorAt(i), cx, cy, r, label: i + 1,
-    });
-  });
-
-  return { lines, movieNodes, centroidNodes, stats, mode };
-}
-
-// A single taste map: responsive SVG scatter + hover tooltip + cluster legend.
-function ClusterMap({ map }) {
-  const [hover, setHover] = useState(null);
-  const {
-    lines, movieNodes, centroidNodes, stats, mode,
-  } = map;
-
-  const legendKey = mode === 'group'
-    ? [['fa-solid fa-diamond text-accent', 'Group cluster'],
-      ['fa-solid fa-circle text-slate-400', "A member's taste"],
-      ['fa-regular fa-circle text-slate-400', 'Recommendation']]
-    : [['fa-solid fa-diamond text-accent', 'Taste cluster'],
-      ['fa-solid fa-circle text-slate-400', 'Movie you liked'],
-      ['fa-regular fa-circle text-slate-400', 'Recommendation']];
-
-  const hoverMeta = hover ? movieMeta(hover.title) : null;
-
+function AlgorithmVisualization({ 
+  catalogCount, 
+  selectionBypassedCount, 
+  guardrailsFilteredCount, 
+  watchedCount,
+  filterCount,
+  scoredCount 
+}) {
   return (
-    <div className="space-y-2">
-      <div className="relative insights-container">
-        <svg
-          className="insights-svg"
-          viewBox={`0 0 ${VIEW_W} ${VIEW_H}`}
-          role="img"
-          aria-label={mode === 'group'
-            ? 'Two-dimensional map of the group taste clusters and members'
-            : 'Two-dimensional map of your taste clusters and movies'}
-          onMouseLeave={() => setHover(null)}
-        >
-          <g>
-            {lines.map((l, i) => (
-              <line
-                key={`l-${i}`}
-                x1={l.x1.toFixed(1)} y1={l.y1.toFixed(1)}
-                x2={l.x2.toFixed(1)} y2={l.y2.toFixed(1)}
-                stroke={l.stroke} strokeOpacity={l.opacity}
-                strokeWidth={1} strokeDasharray={l.dash || undefined}
-              />
-            ))}
-          </g>
-          <g>
-            {movieNodes.map((n, i) => (
-              <circle
-                key={`n-${i}`}
-                className="insights-node"
-                cx={n.px.toFixed(1)} cy={n.py.toFixed(1)} r={n.r}
-                fill={n.fill} stroke={n.stroke || undefined} strokeWidth={n.sw || undefined}
-                fillOpacity={n.fillOpacity != null ? n.fillOpacity : undefined}
-                onMouseEnter={n.title ? () => setHover({
-                  title: n.title, info: n.info, x: n.px, y: n.py,
-                }) : undefined}
-              >
-                {n.plain ? <title>{n.plain}</title> : null}
-              </circle>
-            ))}
-          </g>
-          <g>
-            {centroidNodes.map((c, i) => (
-              <g key={`c-${i}`}>
-                <polygon className="insights-node" points={c.pts} fill={c.fill} stroke="#0b1020" strokeWidth={1.5}>
-                  <title>{`Cluster ${c.label}`}</title>
-                </polygon>
-                <text
-                  x={c.cx.toFixed(1)} y={(c.cy - c.r - 5).toFixed(1)}
-                  textAnchor="middle" fontSize="11" fontWeight="700" fill={c.fill}
-                >
-                  {c.label}
-                </text>
-              </g>
-            ))}
-          </g>
-        </svg>
-
-        {hover && (
-          <div
-            className="insights-tooltip absolute pointer-events-none bg-panel border border-line rounded-lg p-2 shadow-xl z-50 flex flex-col gap-1 items-center w-28 text-center"
-            style={{
-              left: `${(hover.x / VIEW_W) * 100}%`,
-              top: `${(hover.y / VIEW_H) * 100}%`,
-              transform: 'translate(-50%, calc(-100% - 8px))',
-            }}
-          >
-            <div className="shrink-0 mb-1">
-              <Poster movie={hoverMeta || { title: hover.title }} className="w-16 h-24 rounded" />
-            </div>
-            <div className="text-[11px] font-semibold text-slate-100 leading-tight max-w-[100px] break-words">
-              {hover.title}
-            </div>
-            {hover.info && <div className="text-[9px] text-slate-400 mt-0.5 leading-tight">{hover.info}</div>}
-          </div>
-        )}
+    <div className="bg-panel2 p-4 rounded-xl border border-line space-y-4">
+      <div>
+        <h4 className="font-semibold text-white text-base">Recommendation Funnel</h4>
+        <p className="text-xs text-slate-400">How the recommendation engine filters and ranks the 18,725 catalog movies in real-time.</p>
       </div>
 
-      <div className="flex flex-wrap gap-x-4 gap-y-1 text-[11px] text-slate-400 px-1">
-        {legendKey.map(([icon, label]) => (
-          <span key={label}><i className={`${icon} mr-1`} aria-hidden="true" />{label}</span>
-        ))}
-      </div>
+      {/* Funnel Progress Visual */}
+      <div className="space-y-2.5 pt-1">
+        {/* Step 1: Catalog */}
+        <div className="space-y-1">
+          <div className="flex justify-between text-xs">
+            <span className="text-slate-300 font-semibold">1. Catalog Database</span>
+            <span className="text-slate-400">{catalogCount.toLocaleString()} movies</span>
+          </div>
+          <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+            <div className="bg-indigo-600 h-2 rounded-full" style={{ width: '100%' }} />
+          </div>
+        </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1">
-        {stats.map((st, i) => (
-          <div key={`st-${i}`} className="flex items-start gap-2 text-xs">
-            <span className="insights-legend-dot mt-0.5" style={{ background: colorAt(i) }} />
-            <div className="min-w-0">
-              <div className="font-semibold text-slate-200">{`Cluster ${i + 1}`}</div>
-              <div className="text-slate-400">
-                {mode === 'group'
-                  ? `${st.members} member taste${st.members === 1 ? '' : 's'} · ${st.recs} recommended`
-                  : (
-                    <>
-                      {`${st.liked} liked · ${st.recs} recommended · `}
-                      {st.top
-                        ? <>e.g. <span className="text-slate-300">{st.top}</span></>
-                        : 'no liked films yet'}
-                    </>
-                  )}
-              </div>
+        {/* Step 2: Selection */}
+        <div className="space-y-1">
+          <div className="flex justify-between text-xs">
+            <span className="text-slate-300 font-semibold">2. Heuristic Selection (Isolates Top 600)</span>
+            <span className="text-slate-400">600 candidates</span>
+          </div>
+          <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+            <div className="bg-cyan-500 h-2 rounded-full" style={{ width: `${(600 / catalogCount) * 100}%` }} />
+          </div>
+          <div className="text-[10px] text-slate-500 italic">
+            Bypassed {selectionBypassedCount.toLocaleString()} less relevant titles (not matching group's top genres, nearest semantic neighbors, or critical benchmarks).
+          </div>
+        </div>
+
+        {/* Step 3: Filters & Exclusions */}
+        <div className="bg-slate-900/40 p-3 rounded-lg border border-line/60 text-xs space-y-2">
+          <div className="font-semibold text-slate-300">3. Candidate Exclusions (applied to the 600 pool):</div>
+          
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+            <div className="bg-slate-900/60 p-2 rounded-md border border-line/45 flex flex-col justify-between">
+              <span className="text-[10px] uppercase font-bold text-slate-500">Already Watched</span>
+              <span className="text-sm font-semibold text-rose-400">-{watchedCount.toLocaleString()} movies</span>
+              <span className="text-[9px] text-slate-500 leading-tight">Seen, rated, or nominated by room members.</span>
+            </div>
+
+            <div className="bg-slate-900/60 p-2 rounded-md border border-line/45 flex flex-col justify-between">
+              <span className="text-[10px] uppercase font-bold text-slate-500">Active Search Filters</span>
+              <span className="text-sm font-semibold text-amber-500">-{filterCount.toLocaleString()} movies</span>
+              <span className="text-[9px] text-slate-500 leading-tight">Do not match current genre or language selections.</span>
+            </div>
+
+            <div className="bg-slate-900/60 p-2 rounded-md border border-line/45 flex flex-col justify-between">
+              <span className="text-[10px] uppercase font-bold text-slate-500">Guardrail Dislikes</span>
+              <span className="text-sm font-semibold text-rose-500">-{guardrailsFilteredCount.toLocaleString()} movies</span>
+              <span className="text-[9px] text-slate-500 leading-tight">Blocked by explicit title, genre, or director dislikes.</span>
             </div>
           </div>
-        ))}
+        </div>
+
+        {/* Step 4: Scored Pool */}
+        <div className="space-y-1">
+          <div className="flex justify-between text-xs">
+            <span className="text-slate-300 font-semibold">4. Scoring Engine</span>
+            <span className="text-emerald-400 font-bold">{scoredCount.toLocaleString()} movies ranked</span>
+          </div>
+          <div className="w-full bg-slate-800 rounded-full h-2 overflow-hidden">
+            <div className="bg-emerald-500 h-2 rounded-full" style={{ width: `${(scoredCount / 600) * 100}%` }} />
+          </div>
+          <div className="text-[10px] text-slate-500 italic">
+            Remaining candidates are scored in sub-milliseconds against semantic similarity (65%), genre profile (20%), and Bayesian quality score (15%).
+          </div>
+        </div>
+      </div>
+
+      {/* Group Aggregation note */}
+      <div className="bg-indigo-950/20 border border-indigo-900/35 p-2.5 rounded-lg text-[11px] text-indigo-300">
+        <strong className="text-indigo-200">Group Aggregation:</strong> When matching in a room, individual scores are aggregated using a Least Misery model: 
+        <span className="bg-slate-900/50 px-1.5 py-0.5 rounded font-mono ml-1 text-slate-300">0.70 * Mean + 0.30 * Min</span> to prioritize shared interests while blocking disliked picks.
       </div>
     </div>
   );
 }
-
-function SectionTitle({ title, sub }) {
-  return (
-    <div className="space-y-0.5">
-      <h4 className="font-display text-lg tracking-wide text-white">{title}</h4>
-      <p className="text-[11px] text-slate-500">{sub}</p>
-    </div>
-  );
-}
-
-const EmptyMsg = ({ children }) => (
-  <p className="text-sm text-slate-500 italic py-8 text-center">{children}</p>
-);
 
 export default function InsightsModal({ open, onClose }) {
-  // Recompute the maps whenever the modal opens so they reflect current taste.
   const model = useMemo(() => {
     if (!open) return { status: 'closed' };
-    if (!runtime.EMBEDDINGS_BUFFER) return { status: 'loading' };
+    if (!runtime.recommendationManifest) return { status: 'loading' };
 
     let profile;
-    try { profile = buildTasteProfile(); } catch (e) { profile = null; }
-    const centroids = (profile?.centroids || []).filter((c) => isVector(c));
-    if (!centroids.length) return { status: 'empty' };
+    try {
+      profile = buildTasteProfile();
+    } catch (e) {
+      profile = null;
+    }
+    
+    if (!profile || (!profile.likedMovieIds.length && !profile.watchlistMovieIds.length)) {
+      return { status: 'empty' };
+    }
 
-    // Liked films that shaped the personal clusters (de-duplicated by title).
-    const likedSeen = new Set();
-    const liked = [];
-    (profile.positiveSamples || []).forEach((s) => {
-      if (!isVector(s.emb)) return;
-      const key = normTitle(s.title);
-      if (likedSeen.has(key)) return;
-      likedSeen.add(key);
-      liked.push({ title: s.title, emb: s.emb, kind: 'liked' });
+    const manifestMovies = runtime.recommendationManifest.movies || {};
+    
+    // Group liked and recommended movies by precomputed HDBSCAN cluster
+    const clusterMap = {}; // clusterId -> { liked: [], recs: [], genres: {} }
+    
+    const getClusterObj = (cid) => {
+      if (clusterMap[cid] === undefined) {
+        clusterMap[cid] = { liked: [], recs: [], genres: {} };
+      }
+      return clusterMap[cid];
+    };
+
+    // Group liked movies
+    profile.likedMovieIds.forEach(id => {
+      const m = manifestMovies[id];
+      if (m) {
+        const cid = m.clusterId;
+        const obj = getClusterObj(cid);
+        obj.liked.push({ id, title: m.title });
+        (m.genres || []).forEach(g => {
+          obj.genres[g] = (obj.genres[g] || 0) + 1;
+        });
+      }
     });
 
-    // Current on-screen recommendations (shared by both maps).
-    const recs = [];
-    const recSeen = new Set();
+    // Re-build activeMembers list
+    const activeMembers = [profile];
+    const peers = (runtime.state && runtime.state.peers) || [];
+    const activePeers = peers.filter(p => p.connected !== false);
+    const peerProfiles = runtime.peerProfiles || {};
+    activePeers.forEach(p => {
+      if (p.id !== runtime.myId && peerProfiles[p.id]) {
+        activeMembers.push(peerProfiles[p.id]);
+      }
+    });
+
+    // Get the candidates pool (pre-exclusions)
+    const candidates = getCandidates(activeMembers); // length is 3000 - guardrailsFilteredCount
+
+    // Replicate filters
+    const activeGenres = runtime.activeSelectedGenres || [];
+    const activeLangs = runtime.activeSelectedLanguages || [];
+    const seenSet = roomSeenTitles();
+    const nominatedSet = new Set((runtime.state?.movies || []).map((m) => normTitle(m.title)));
+    const skipSet = new Set(loadNotInterested().map((x) => normTitle(x.title)));
+
+    let watchedCount = 0;
+    let filterCount = 0;
+
+    candidates.forEach(m => {
+      const movieObj = manifestMovies[m.id];
+      if (!movieObj) return;
+
+      // Genre/Lang filters
+      if (activeGenres.length > 0) {
+        const genreMatch = (movieObj.genres || []).some((g) => activeGenres.includes(g));
+        if (!genreMatch) {
+          filterCount++;
+          return;
+        }
+      }
+      if (activeLangs.length > 0) {
+        if (!activeLangs.includes(movieObj.language)) {
+          filterCount++;
+          return;
+        }
+      }
+
+      // Already Watched/Seen/Nominated
+      const nt = normTitle(movieObj.title);
+      if (seenSet.has(nt) || nominatedSet.has(nt) || skipSet.has(nt)) {
+        watchedCount++;
+        return;
+      }
+    });
+
+    // Pipeline selection math
+    const catalogCount = 18725;
+    const maxSelectedCandidates = 600;
+    const selectionBypassedCount = catalogCount - maxSelectedCandidates;
+    const guardrailsFilteredCount = maxSelectedCandidates - candidates.length;
+    
     const cache = getRecCache();
-    ((cache && cache.list) || []).forEach((rec) => {
-      const m = rec.movie;
-      if (!m) return;
-      const emb = movieEmbedding(m);
-      if (!isVector(emb)) return;
-      const key = normTitle(m.title);
-      if (recSeen.has(key)) return;
-      recSeen.add(key);
-      recs.push({ title: m.title, emb, kind: 'rec' });
+    const scoredCount = (cache && cache.totalAvailable) || 0;
+
+    const recList = (cache && cache.list) || [];
+    recList.forEach(rec => {
+      const movieObj = rec.movie;
+      if (!movieObj) return;
+      const m = manifestMovies[String(movieObj.id)];
+      if (m) {
+        const cid = m.clusterId;
+        const obj = getClusterObj(cid);
+        obj.recs.push({ id: movieObj.id, title: m.title });
+        (m.genres || []).forEach(g => {
+          obj.genres[g] = (obj.genres[g] || 0) + 1;
+        });
+      }
     });
 
-    const personal = buildClusterMap(centroids, liked.concat(recs), 'personal');
+    // Structure cluster metadata
+    const clusters = Object.entries(clusterMap).map(([cid, data]) => {
+      const clusterId = Number(cid);
+      const topGenres = Object.entries(data.genres)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 2)
+        .map(entry => entry[0]);
+      
+      const label = `Cluster ${clusterId + 1} (${topGenres.join(' & ') || 'Mixed'})`;
+      
+      return {
+        clusterId,
+        label,
+        likedCount: data.liked.length,
+        recsCount: data.recs.length,
+        liked: data.liked.slice(0, 6),
+        recs: data.recs.slice(0, 6),
+      };
+    }).sort((a, b) => (b.likedCount + b.recsCount) - (a.likedCount + a.recsCount));
 
-    // Group map: secondary K-Means centroids + every member's taste + recs.
-    const groupCentroids = (profile.groupCentroids || []).filter((c) => isVector(c));
-    const memberPoints = [];
-    centroids.forEach((c) => memberPoints.push({ emb: Array.from(c), kind: 'member' }));
-    const pv = (runtime.state && runtime.state.peerVectors) || {};
-    let peerCount = 0;
-    Object.keys(pv).forEach((pid) => {
-      if (pid === runtime.myId) return;
-      const list = pv[pid];
-      if (!Array.isArray(list)) return;
-      let added = 0;
-      list.forEach((v) => { if (isVector(v)) { memberPoints.push({ emb: Array.from(v), kind: 'member' }); added += 1; } });
-      if (added) peerCount += 1;
-    });
-    const group = (groupCentroids.length)
-      ? buildClusterMap(groupCentroids, memberPoints.concat(recs), 'group')
-      : null;
+    // Structure genre weights percentage
+    const totalWeight = (profile.genreWeights || []).reduce((sum, gw) => sum + gw.weight, 0);
+    const genres = (profile.genreWeights || []).map(gw => ({
+      genre: gw.genre,
+      weight: gw.weight,
+      percentage: totalWeight > 0 ? Math.round((gw.weight / totalWeight) * 100) : 0
+    })).sort((a, b) => b.weight - a.weight).slice(0, 6);
 
-    return { status: 'ok', personal, group };
+    return { 
+      status: 'ok', 
+      clusters, 
+      genres, 
+      scoredCount, 
+      selectionBypassedCount, 
+      guardrailsFilteredCount,
+      watchedCount,
+      filterCount
+    };
   }, [open]);
 
   return (
-    <Modal open={open} onClose={onClose} title="Taste insights" className="max-w-3xl">
+    <Modal open={open} onClose={onClose} title="Taste Insights" className="max-w-3xl">
       {model.status === 'loading' && (
-        <EmptyMsg>Recommendation vectors are still loading — try again in a moment.</EmptyMsg>
+        <p className="text-sm text-slate-500 italic py-8 text-center">Loading recommendation insights — try again in a moment.</p>
       )}
       {model.status === 'empty' && (
-        <EmptyMsg>Rate or train a few movies to build your taste clusters, then check back here.</EmptyMsg>
+        <p className="text-sm text-slate-500 italic py-8 text-center">Rate or add movies to your watchlist to build your taste clusters, then check back here.</p>
       )}
       {model.status === 'ok' && (
-        <div className="space-y-4">
-          <div className="space-y-3">
-            <SectionTitle title="Your taste" sub="Your own liked films clustered into preference centroids." />
-            <ClusterMap map={model.personal} />
+        <div className="space-y-6 max-h-[75vh] overflow-y-auto pr-1">
+          {/* Recommendation Pipeline Visualization */}
+          <AlgorithmVisualization
+            catalogCount={18725}
+            selectionBypassedCount={model.selectionBypassedCount}
+            guardrailsFilteredCount={model.guardrailsFilteredCount}
+            watchedCount={model.watchedCount}
+            filterCount={model.filterCount}
+            scoredCount={model.scoredCount}
+          />
+
+          {/* Taste Signature */}
+          <div className="space-y-3 bg-panel2 p-4 rounded-xl border border-line">
+            <div>
+              <h4 className="font-semibold text-white text-base">Your Taste Signature</h4>
+              <p className="text-xs text-slate-400">Top genres driving your recommendations based on liked and watchlist movies.</p>
+            </div>
+            
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2">
+              {model.genres.map(g => (
+                <div key={g.genre} className="space-y-1">
+                  <div className="flex justify-between text-xs font-semibold">
+                    <span className="text-slate-200">{g.genre}</span>
+                    <span className="text-slate-400">{g.percentage}%</span>
+                  </div>
+                  <div className="w-full bg-slate-800 rounded-full h-1.5 overflow-hidden">
+                    <div 
+                      className="bg-indigo-500 h-1.5 rounded-full" 
+                      style={{ width: `${g.percentage}%` }}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="space-y-3 pt-4 mt-2 border-t border-line">
-            <SectionTitle title="Group taste" sub="A second round of K-Means over everyone’s centroids — the moods the room shares." />
-            {model.group
-              ? <ClusterMap map={model.group} />
-              : <EmptyMsg>Group taste appears once other people join the room and share their tastes.</EmptyMsg>}
+
+          {/* Taste Clusters */}
+          <div className="space-y-4">
+            <div>
+              <h4 className="font-semibold text-white text-base">Your Taste Clusters</h4>
+              <p className="text-xs text-slate-400">Your movies grouped by semantic density using offline HDBSCAN clustering.</p>
+            </div>
+
+            <div className="space-y-3">
+              {model.clusters.map(c => (
+                <div key={c.clusterId} className="bg-panel2/50 border border-line/75 p-4 rounded-xl space-y-3">
+                  <div className="flex items-center justify-between border-b border-line pb-2">
+                    <span className="font-semibold text-sm text-slate-200">{c.label}</span>
+                    <span className="text-xs text-slate-400">
+                      {c.likedCount} liked · {c.recsCount} recommended
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    {/* Liked list */}
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] font-bold tracking-wider text-slate-400 uppercase">Liked in this cluster</div>
+                      {c.liked.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {c.liked.map(m => (
+                            <span key={m.id} className="inline-block px-2 py-0.5 bg-slate-800 border border-slate-700/60 rounded-md text-[11px] text-slate-300">
+                              {m.title}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-slate-500 italic">None yet</div>
+                      )}
+                    </div>
+
+                    {/* Recommendations list */}
+                    <div className="space-y-1.5">
+                      <div className="text-[10px] font-bold tracking-wider text-slate-400 uppercase">Picks for you</div>
+                      {c.recs.length > 0 ? (
+                        <div className="flex flex-wrap gap-1.5">
+                          {c.recs.map(m => (
+                            <span key={m.id} className="inline-block px-2 py-0.5 bg-indigo-500/10 border border-indigo-500/25 rounded-md text-[11px] text-indigo-300">
+                              {m.title}
+                            </span>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="text-xs text-slate-500 italic">None yet</div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Guard Rails */}
+          <div className="space-y-3 bg-panel2 p-4 rounded-xl border border-line">
+            <div>
+              <h4 className="font-semibold text-white text-base">Guard Rails</h4>
+              <p className="text-xs text-slate-400">Movies filtered out of the candidate pool due to explicit room member dislikes.</p>
+            </div>
+            
+            <div className="pt-1">
+              {runtime.guardrailsFiltered && runtime.guardrailsFiltered.length > 0 ? (
+                <div className="max-h-48 overflow-y-auto space-y-2 pr-1 custom-scrollbar">
+                  {runtime.guardrailsFiltered.map((m, idx) => (
+                    <div key={idx} className="flex justify-between items-start gap-4 p-2 bg-slate-900/40 rounded-lg border border-line/40 text-xs">
+                      <span className="font-semibold text-slate-200">{m.title}</span>
+                      <span className="text-[10px] text-slate-400 italic shrink-0 text-right">{m.reason}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-xs text-slate-500 italic">No movies were filtered out by guard rails.</div>
+              )}
+            </div>
           </div>
         </div>
       )}

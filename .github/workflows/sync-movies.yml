@@ -49,7 +49,9 @@ jobs:
         run: pip install --upgrade protobuf grpcio-tools
 
       - name: Generate Protobuf bindings
-        run: python -m grpc_tools.protoc -I scripts --python_out scripts scripts/catalog.proto
+        run: |
+          python -m grpc_tools.protoc -I scripts --python_out scripts scripts/catalog.proto
+          python -m grpc_tools.protoc -I scripts --python_out scripts scripts/recommendation.proto
 
       - name: Download TMDB daily id export
         run: |
@@ -76,7 +78,7 @@ jobs:
             --ids-file "$IDS_FILE"
 
       - name: Install embedding dependencies
-        run: pip install --upgrade google-genai
+        run: pip install --upgrade google-genai numpy scipy scikit-learn
 
       - name: Generate embeddings
         env:

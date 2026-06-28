@@ -9,8 +9,8 @@
 import protobuf from 'protobufjs/light';
 import { normTitle, dbKey } from './format.js';
 import { runtime, emit } from './runtime.js';
-import { loadEmbeddings } from './embeddings.js';
 import { cachedFetch } from './datacache.js';
+import { loadRecommendationManifest } from './recommendation.js';
 
 // Base TMDB poster domain. sync.py stores only the relative path suffix in the
 // binary catalogue (e.g. "/lh4v5.jpg"); we re-prefix it here at load time.
@@ -153,6 +153,9 @@ export async function loadMovieDb({ onEmbeddingsReady } = {}) {
     const decoded = Catalog.decode(new Uint8Array(buf));
     runtime.MOVIE_DB = (decoded.movies || []).map(inflateMovie);
     runtime.movieDbStatus = 'ready';
+    
+    // Ingest the precomputed recommendation manifest
+    await loadRecommendationManifest();
   } catch (e) {
     runtime.MOVIE_DB = [];
     runtime.movieDbStatus = 'error';
@@ -160,14 +163,11 @@ export async function loadMovieDb({ onEmbeddingsReady } = {}) {
     console.warn('Could not load movies.pbf:', e);
   }
   indexMovieDb();
-  // Mark embeddings as loading up-front so the carousel shimmers rather than
-  // briefly flashing popularity-only picks before loadEmbeddings() flips status.
-  if (runtime.movieDbStatus === 'ready') runtime.embeddingsStatus = 'loading';
+  
+  // Set status directly to ready, skipping embeddings download
+  runtime.embeddingsStatus = 'ready';
   emit();
-  if (runtime.movieDbStatus === 'ready') {
-    loadEmbeddings({ onReady: onEmbeddingsReady });
-  } else {
-    runtime.embeddingsStatus = 'idle';
-    runtime.embeddingsError = '';
+  if (runtime.movieDbStatus === 'ready' && typeof onEmbeddingsReady === 'function') {
+    try { onEmbeddingsReady(); } catch (e) {}
   }
 }

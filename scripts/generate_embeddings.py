@@ -541,6 +541,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
 
     catalog_io.save_catalog_proto(args.movies_path, catalog)
     print(f"Updated {args.movies_path} and completed writing embeddings.")
+
+    # Trigger offline recommendation manifest precomputation
+    try:
+        import precompute
+        output_manifest_path = os.path.join(embeddings_dir, "movie_manifest.pb")
+        precompute.precompute_recommendation_data(
+            movies_path=args.movies_path,
+            embeddings_path=args.embeddings_path,
+            output_path=output_manifest_path,
+            min_cluster_size=10,
+            dim=args.dim
+        )
+    except Exception as e:
+        print(f"Error during recommendation precomputation: {e}", file=sys.stderr)
+
     return 0
 
 

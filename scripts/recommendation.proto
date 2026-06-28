@@ -1,0 +1,46 @@
+syntax = "proto3";
+
+package movienight;
+
+option go_package = "github.com/kcarretto/movie-night/pkg/recommendation/pb;pb";
+
+// --- Static Database Manifest Layout ---
+message MovieManifest {
+    // Key is the Unique Movie ID (e.g., TMDB integer string or IMDB ID)
+    map<string, Movie> movies = 1;
+}
+
+message Movie {
+    string title = 1;
+    int32 cluster_id = 2;
+    string director = 3;
+    repeated string genres = 4;
+    float critical_score = 5; // Pre-calculated Bayesian average scaled [0, 1]
+    
+    // Key is neighbor Movie ID, value is Cosine Similarity score [0, 1]
+    // Limited strictly to Top-50 to optimize mobile memory constraints
+    map<string, float> top_neighbors = 6;
+}
+
+// --- Real-Time Network Synchronization Layout ---
+message UserNetworkProfile {
+    string user_id = 1;
+    repeated string liked_movie_ids = 2;       // Target for client-side Max-Similarity match
+    repeated string watchlist_movie_ids = 3;   // Target for client-side Watchlist bonus
+    repeated string dislike_movie_ids = 4;     // Strict guardrail target
+    repeated string dislike_genres = 5;        // Strict genre block
+    repeated string dislike_directors = 6;     // Strict director block
+    
+    message GenreWeight {
+        string genre = 1;
+        int32 weight = 2;
+    }
+    repeated GenreWeight genre_weights = 7;    // Tracking categorical user genre intensity
+    repeated string preferred_directors = 8;   // Target for Director bonus
+    repeated string preferred_actors = 9;      // Target for Actor/Cast bonus
+}
+
+message RoomSyncSession {
+    string session_id = 1;
+    repeated UserNetworkProfile active_members = 2;
+}

@@ -13,7 +13,7 @@
 // When Cache Storage is unavailable (e.g. non-secure context or private mode)
 // we transparently fall back to a plain revalidating network fetch.
 
-const DATA_CACHE = 'plot-polls-data-v1';
+const DATA_CACHE = 'plot-polls-data-v2';
 
 // Cache Storage requires a secure context (https or localhost) and the global
 // `caches` object. Probe defensively so a missing API never breaks loading.

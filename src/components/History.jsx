@@ -5,6 +5,7 @@ import { movieMeta } from '../lib/catalog.js';
 import { loadHistory, loadWatched, loadWatchlist, removeFromWatchlist, saveWatched } from '../lib/storage.js';
 import { markRankingStale } from '../lib/recengine.js';
 import { afterTasteChange, shareSeen } from '../state/controller.js';
+import { useStore } from '../state/useStore.js';
 
 // Resolve a finishing order from the recorded instant-runoff rounds: the winner
 // places first, then everyone else by reverse elimination order (the last
@@ -117,12 +118,13 @@ function MovieNightEntry({ h }) {
 }
 
 export default function History() {
+  const rt = useStore();
   const [q, setQ] = useState('');
   const [sort, setSort] = useState('recent');
   const [tick, setTick] = useState(0);
 
-  const history = useMemo(() => loadHistory().slice().reverse(), [tick]);
-  const watchlist = useMemo(() => loadWatchlist().slice().reverse(), [tick]);
+  const history = useMemo(() => loadHistory().slice().reverse(), [tick, rt.version]);
+  const watchlist = useMemo(() => loadWatchlist().slice().reverse(), [tick, rt.version]);
   const watched = useMemo(() => {
     const rows = loadWatched().slice();
     rows.sort((a, b) => {
@@ -131,7 +133,7 @@ export default function History() {
       return (b.watchedAt || 0) - (a.watchedAt || 0);
     });
     return rows;
-  }, [sort, tick]);
+  }, [sort, tick, rt.version]);
 
   const query = q.trim().toLowerCase();
   const watchedFiltered = watched.filter((w) => !query || (w?.title && w.title.toLowerCase().includes(query)));

@@ -1,16 +1,10 @@
 // ======================================================================
-//  LOCAL ML RECOMMENDATION ENGINE
+//  LOCAL ML RECOMMENDATION ENGINE (Precomputed HDBSCAN version)
 // ======================================================================
-// Vector-first recommender: clusters the viewer's liked-film embeddings into
-// K-Means taste centroids and scores every catalogue entry by max-pooled cosine
-// similarity to the room's centroids. Ported verbatim from the original app;
-// global `state` / `myId` / `MOVIE_DB` now live on the shared runtime store.
 
 import { runtime } from './runtime.js';
 import { movieMeta } from './catalog.js';
-import { movieEmbedding } from './embeddings.js';
-import { isVector, normTitle, movieGenres } from './format.js';
-import { cosineSimilarity, clusterCentroids } from './vector.js';
+import { normTitle } from './format.js';
 import {
   loadWatched, loadWatchlist, loadInterested, loadNotInterested, loadHistory,
   loadSeenRecommendations, saveSeenRecommendations,
@@ -20,217 +14,280 @@ export const REC_CONFIG = {
   maxResults: 18,
   newSinceYear: new Date().getFullYear() - 2,
   newFraction: 0.35,
-  maxCentroids: 5,
-  centroidIters: 6,
-  dislikeAlpha: 0.5,
-  groupCentroids: 5,
-  minVoteCount: 150,
-  minPopularity: 2.0,
-  credibilityThreshold: 10000,
-  personaliseThreshold: 3,
-  watchlistStrength: 2.0,
-  notInterestedStrength: 1.5,
   watchlistInjectFraction: 0.15,
 };
 
 export const isNewMovie = (m) => !!(m && m.year && m.year >= REC_CONFIG.newSinceYear);
 
-const isObscureMovie = (m) => {
-  const votes = m && m.voteCount ? m.voteCount : 0;
-  if (votes <= 0) return false;
-  const pop = m && m.popularity ? m.popularity : 0;
-  return votes < REC_CONFIG.minVoteCount || pop < REC_CONFIG.minPopularity;
-};
+export function computeMyCentroids() { return []; }
+export function myTasteVector() { return []; }
+export function buildTasteProfile() { return buildLocalProfile(); }
 
-// ---------- quality score ----------
-function qualityScore(m) {
-  const r = (m && m.ratings) || {};
-  let sum = 0, n = 0;
-  if (r.imdb != null) { sum += Math.max(0, Math.min(1, r.imdb / 10)); n += 1; }
-  if (r.rottenTomatoes != null) { sum += Math.max(0, Math.min(1, r.rottenTomatoes / 100)); n += 1; }
-  if (r.letterboxd != null) { sum += Math.max(0, Math.min(1, r.letterboxd / 5)); n += 1; }
-
-  let score = n ? sum / n : 0.5;
-  if (score < 0.5) {
-    score *= 0.1; // Assign much lower weight for average rating below 2.5 (0.5 on 0-1 scale)
-  }
-  return score;
-}
-
-// ---------- audience-trust (log-scaled popularity) ----------
-let _maxVoteLog = 0, _maxVoteLogFor = -1;
-function maxVoteLog() {
-  if (_maxVoteLogFor !== runtime.MOVIE_DB.length) {
-    let maxVotes = 0;
-    for (const m of runtime.MOVIE_DB) {
-      const v = m && m.voteCount ? m.voteCount : 0;
-      if (v > maxVotes) maxVotes = v;
-    }
-    _maxVoteLog = Math.log(maxVotes + 1) || 1;
-    _maxVoteLogFor = runtime.MOVIE_DB.length;
-  }
-  return _maxVoteLog;
-}
-
-function popularityTrust(m) {
-  const votes = m && m.voteCount ? m.voteCount : 0;
-  if (votes <= 0) return 0.5;
-  const threshold = REC_CONFIG.credibilityThreshold;
-  if (!(threshold > 0)) return 0.5;
-  if (votes >= threshold) return 1;
-  const denom = Math.log(threshold + 1) || 1;
-  return Math.max(0, Math.min(1, Math.log(votes + 1) / denom));
-}
-
-// ---------- secondary clustering: group taste centroids ----------
-function computeGroupCentroids(localCentroids) {
-  const samples = [];
-  const pushSet = (vecs) => {
-    if (!Array.isArray(vecs)) return;
-    for (const v of vecs) {
-      if (isVector(v)) samples.push({ emb: Array.from(v), weight: 1 });
-    }
-  };
-  pushSet(localCentroids);
-  const pv = (runtime.state && runtime.state.peerVectors) || {};
-  Object.keys(pv).forEach((pid) => {
-    if (pid === runtime.myId) return;
-    pushSet(pv[pid]);
-  });
-  if (!samples.length) return [];
-  return clusterCentroids(samples, REC_CONFIG.groupCentroids, REC_CONFIG.centroidIters);
-}
-
-// Cached primary centroid set so the broadcast path never re-clusters.
-let _myCentroids = null;
-
-// Build a vector-first taste profile from the viewer's history.
-export function buildTasteProfile() {
-  const positiveSamples = [];
-  const dislikeAnchors = [];
-  const likedGenres = new Map();
-
-  function addPositive(meta, scalar, ageDays) {
-    if (!(scalar > 0)) return;
-    const recencyDecay = Math.exp(-(ageDays > 0 ? ageDays : 0) / 90);
-    const weight = scalar * recencyDecay;
-    if (!(weight > 0)) return;
-    const emb = movieEmbedding(meta);
-    if (!isVector(emb) || emb.length === 0) return;
-    positiveSamples.push({ title: meta.title, emb, weight });
-    movieGenres(meta).forEach((g) => likedGenres.set(g, (likedGenres.get(g) || 0) + weight));
-  }
-  function addDislike(meta) {
-    const emb = movieEmbedding(meta);
-    if (!isVector(emb) || emb.length === 0) return;
-    dislikeAnchors.push(Array.from(emb));
-  }
-
+// Build the local user's network profile representation
+export function buildLocalProfile() {
+  const liked = new Set();
+  const watchlist = new Set();
+  const dislikeIds = new Set();
+  const dislikeGenres = new Set();
+  const dislikeDirectors = new Set();
+  
   const watched = loadWatched();
-  let rated = 0;
-  watched.forEach((wEntry) => {
-    const meta = movieMeta(wEntry.title);
+  watched.forEach(w => {
+    const meta = movieMeta(w.title);
     if (!meta) return;
-    const r = wEntry.rating || 0;
-    if (r) rated += 1;
-    const ageDays = (Date.now() - (wEntry.watchedAt || Date.now())) / (1000 * 60 * 60 * 24);
-    if (r > 2.5) addPositive(meta, r - 2.5, ageDays);
-    else if (r > 0 && r < 2.5) addDislike(meta);
-    else if (r === 0) addPositive(meta, 0.5, ageDays);
+    const r = w.rating || 0;
+    if (r >= 4.0) {
+      liked.add(String(meta.id));
+    } else if (r > 0 && r <= 2.0) {
+      dislikeIds.add(String(meta.id));
+      (meta.genres || []).forEach(g => dislikeGenres.add(g));
+      if (meta.director) {
+        if (Array.isArray(meta.director)) {
+          meta.director.forEach(d => dislikeDirectors.add(d));
+        } else {
+          dislikeDirectors.add(meta.director);
+        }
+      }
+    }
   });
 
-  const watchlist = loadWatchlist();
-  watchlist.forEach((entry) => {
-    const meta = movieMeta(entry.title);
-    if (meta) addPositive(meta, REC_CONFIG.watchlistStrength, 0);
+  const wl = loadWatchlist();
+  wl.forEach(w => {
+    const meta = movieMeta(w.title);
+    if (meta) {
+      watchlist.add(String(meta.id));
+    }
   });
 
-  const interested = loadInterested();
-  interested.forEach((entry) => {
-    const meta = movieMeta(entry.title);
-    if (!meta) return;
-    const lvl = entry.interest || 0;
-    const strength = lvl ? (lvl / 5) * 2 : 0.6;
-    addPositive(meta, strength, 0);
+  const ni = loadNotInterested();
+  ni.forEach(w => {
+    const meta = movieMeta(w.title);
+    if (meta) {
+      dislikeIds.add(String(meta.id));
+      (meta.genres || []).forEach(g => dislikeGenres.add(g));
+      if (meta.director) {
+        if (Array.isArray(meta.director)) {
+          meta.director.forEach(d => dislikeDirectors.add(d));
+        } else {
+          dislikeDirectors.add(meta.director);
+        }
+      }
+    }
   });
 
-  const notInterested = loadNotInterested();
-  notInterested.forEach((entry) => {
-    const meta = movieMeta(entry.title);
-    if (meta) addDislike(meta);
+  // Calculate genre weights (frequency counts in liked & watchlist)
+  const genreCounts = {};
+  liked.forEach(id => {
+    const meta = movieMeta(null, Number(id));
+    if (meta) {
+      (meta.genres || []).forEach(g => {
+        genreCounts[g] = (genreCounts[g] || 0) + 1;
+      });
+    }
   });
+  watchlist.forEach(id => {
+    const meta = movieMeta(null, Number(id));
+    if (meta) {
+      (meta.genres || []).forEach(g => {
+        genreCounts[g] = (genreCounts[g] || 0) + 1;
+      });
+    }
+  });
+  const genreWeights = Object.entries(genreCounts).map(([genre, weight]) => ({
+    genre,
+    weight
+  }));
 
-  const trainingSignals = watchlist.length + interested.length + notInterested.length;
-  const hasSignal = rated + watched.length + loadHistory().length + trainingSignals
-                    >= REC_CONFIG.personaliseThreshold;
+  // Preferred directors (from liked & watchlist)
+  const directors = new Set();
+  liked.forEach(id => {
+    const meta = movieMeta(null, Number(id));
+    if (meta && meta.director) {
+      if (Array.isArray(meta.director)) {
+        meta.director.forEach(d => directors.add(d));
+      } else {
+        directors.add(meta.director);
+      }
+    }
+  });
+  watchlist.forEach(id => {
+    const meta = movieMeta(null, Number(id));
+    if (meta && meta.director) {
+      if (Array.isArray(meta.director)) {
+        meta.director.forEach(d => directors.add(d));
+      } else {
+        directors.add(meta.director);
+      }
+    }
+  });
+  const preferredDirectors = [...directors];
 
-  const centroids = clusterCentroids(
-    positiveSamples, REC_CONFIG.maxCentroids, REC_CONFIG.centroidIters);
+  // Preferred actors (first 4 cast members of liked & watchlist)
+  const actors = new Set();
+  liked.forEach(id => {
+    const meta = movieMeta(null, Number(id));
+    if (meta && meta.cast) {
+      meta.cast.slice(0, 4).forEach(a => actors.add(a));
+    }
+  });
+  watchlist.forEach(id => {
+    const meta = movieMeta(null, Number(id));
+    if (meta && meta.cast) {
+      meta.cast.slice(0, 4).forEach(a => actors.add(a));
+    }
+  });
+  const preferredActors = [...actors];
 
-  _myCentroids = centroids;
-
-  const groupCentroids = computeGroupCentroids(centroids);
-
-  return { centroids, groupCentroids, dislikeAnchors, positiveSamples, likedGenres,
-           watchedCount: watched.length, ratedCount: rated, hasSignal };
+  return {
+    userId: runtime.myId || 'local',
+    likedMovieIds: [...liked],
+    watchlistMovieIds: [...watchlist],
+    dislikeMovieIds: [...dislikeIds],
+    dislikeGenres: [...dislikeGenres],
+    dislikeDirectors: [...dislikeDirectors],
+    genreWeights,
+    preferredDirectors,
+    preferredActors
+  };
 }
 
-// My current K-Means taste centroids (2D array), computed if not yet cached.
-export function computeMyCentroids() {
-  try { buildTasteProfile(); }
-  catch (e) { /* embeddings may not be loaded yet */ }
-  return (_myCentroids && _myCentroids.length) ? _myCentroids : [];
-}
-export function myTasteVector() {
-  try {
-    if (_myCentroids == null) buildTasteProfile();
-  } catch (e) { /* embeddings may not be loaded yet */ }
-  return (_myCentroids && _myCentroids.length) ? _myCentroids : [];
-}
+// Generate the evaluation candidate pool of ~500 movies
+export function getCandidates(activeMembers) {
+  if (!runtime.recommendationManifest || !runtime.recommendationManifest.movies) {
+    return [];
+  }
+  
+  const manifestMovies = runtime.recommendationManifest.movies;
+  const candidateIds = new Set();
+  
+  // 1. Add group's watchlists
+  activeMembers.forEach(member => {
+    (member.watchlistMovieIds || []).forEach(id => {
+      if (manifestMovies[id]) {
+        candidateIds.add(id);
+      }
+    });
+  });
+  
+  // 2. Add Top-50 nearest semantic neighbors of all liked movies
+  activeMembers.forEach(member => {
+    (member.likedMovieIds || []).forEach(id => {
+      const m = manifestMovies[id];
+      if (m && m.topNeighbors) {
+        Object.keys(m.topNeighbors).forEach(neighborId => {
+          if (manifestMovies[neighborId]) {
+            candidateIds.add(neighborId);
+          }
+        });
+      }
+    });
+  });
 
-// ---------- candidate scoring ----------
-function scoreCandidate(m, profile) {
-  if (isObscureMovie(m)) return -Infinity;
-  const emb = movieEmbedding(m);
-  if (!isVector(emb)) return qualityScore(m);
+  // 3. Add movies belonging to the same HDBSCAN clusters as liked movies
+  const likedClusters = new Set();
+  activeMembers.forEach(member => {
+    (member.likedMovieIds || []).forEach(id => {
+      const m = manifestMovies[id];
+      if (m && m.clusterId !== undefined && m.clusterId !== -1) {
+        likedClusters.add(m.clusterId);
+      }
+    });
+  });
 
-  let best = -Infinity;
-  if (profile.centroids) {
-    for (const c of profile.centroids) {
-      const s = cosineSimilarity(emb, c);
-      if (s > best) best = s;
+  const allMoviesList = Object.entries(manifestMovies).map(([id, m]) => ({
+    id,
+    title: m.title,
+    clusterId: m.clusterId,
+    director: m.director,
+    genres: m.genres || [],
+    criticalScore: m.criticalScore || 0,
+    topNeighbors: m.topNeighbors || {}
+  }));
+
+  if (likedClusters.size > 0) {
+    const clusterMovies = allMoviesList.filter(m => 
+      m.clusterId !== undefined && likedClusters.has(m.clusterId)
+    );
+    // Sort by critical score so we get the best of these clusters
+    clusterMovies.sort((a, b) => b.criticalScore - a.criticalScore);
+    for (const m of clusterMovies) {
+      if (candidateIds.size >= 400) break;
+      candidateIds.add(m.id);
     }
   }
-  if (profile.groupCentroids) {
-    for (const c of profile.groupCentroids) {
-      if (!isVector(c)) continue;
-      const s = cosineSimilarity(emb, c);
-      if (s > best) best = s;
+
+  // 4. Find dominant genres for the group
+  const groupGenreWeights = {};
+  activeMembers.forEach(member => {
+    (member.genreWeights || []).forEach(gw => {
+      groupGenreWeights[gw.genre] = (groupGenreWeights[gw.genre] || 0) + gw.weight;
+    });
+  });
+  const sortedGenres = Object.entries(groupGenreWeights)
+    .sort((a, b) => b[1] - a[1])
+    .map(entry => entry[0]);
+  const dominantGenres = new Set(sortedGenres.slice(0, 3)); // top 3 genres
+  
+  // Add movies from dominant genres
+  if (dominantGenres.size > 0) {
+    const genreMovies = allMoviesList.filter(m => 
+      (m.genres || []).some(g => dominantGenres.has(g))
+    );
+    genreMovies.sort((a, b) => b.criticalScore - a.criticalScore);
+    for (const m of genreMovies) {
+      if (candidateIds.size >= 500) break;
+      candidateIds.add(m.id);
     }
   }
-  if (best === -Infinity) return qualityScore(m);
-
-  let sim = Math.max(0, best);
-
-  if (profile.dislikeAnchors && profile.dislikeAnchors.length) {
-    let dis = 0;
-    for (const d of profile.dislikeAnchors) {
-      const s = cosineSimilarity(emb, d);
-      if (s > dis) dis = s;
-    }
-    sim = Math.max(0, sim - REC_CONFIG.dislikeAlpha * dis);
+  
+  // 5. Add high critical score movies to fill the pool up to 600
+  allMoviesList.sort((a, b) => b.criticalScore - a.criticalScore);
+  for (const m of allMoviesList) {
+    if (candidateIds.size >= 600) break;
+    candidateIds.add(m.id);
   }
-
-  return sim * qualityScore(m) * popularityTrust(m);
+  
+  // Convert to candidate objects
+  let candidates = [...candidateIds].map(id => {
+    const m = manifestMovies[id];
+    if (!m) return null;
+    return {
+      id,
+      title: m.title,
+      clusterId: m.clusterId,
+      director: m.director,
+      genres: m.genres || [],
+      criticalScore: m.criticalScore || 0,
+      topNeighbors: m.topNeighbors || {}
+    };
+  }).filter(Boolean);
+  
+  // Apply Guardrails
+  const filteredList = [];
+  const keptList = [];
+  candidates.forEach(m => {
+    let blockedReason = null;
+    for (const member of activeMembers) {
+      const dislikeIds = new Set(member.dislikeMovieIds || []);
+      if (dislikeIds.has(m.id)) {
+        blockedReason = `${member.userId === runtime.myId ? 'You' : (member.name || member.userId || 'A peer')} disliked this movie or marked it 'Not Interested'`;
+        break;
+      }
+    }
+    if (blockedReason) {
+      filteredList.push({ id: m.id, title: m.title, reason: blockedReason });
+    } else {
+      keptList.push(m);
+    }
+  });
+  
+  runtime.guardrailsFiltered = filteredList;
+  candidates = keptList;
+  
+  return candidates;
 }
 
-function coldStartScore(m) {
-  if (isObscureMovie(m)) return -Infinity;
-  const recency = isNewMovie(m) ? 0.15 : 0;
-  return (qualityScore(m) * popularityTrust(m)) + recency;
-}
-
-// ---------- blend ----------
+// Blend algorithm for tray variations and new/old movies
 function blendRecommendations(ranked, max) {
   const newRanked = ranked.filter((r) => r.isNew);
   const oldRanked = ranked.filter((r) => !r.isNew);
@@ -272,37 +329,137 @@ function blendRecommendations(ranked, max) {
   return out;
 }
 
-// ---------- main entry point ----------
-function computeRecommendations(maxResults = REC_CONFIG.maxResults, profile = null) {
-  if (!runtime.MOVIE_DB.length) return [];
-  if (!profile) profile = buildTasteProfile();
-  const personalised = profile.hasSignal;
-  const seenSet = roomSeenTitles();
-  const nominatedSet = new Set(runtime.state.movies.map((m) => normTitle(m.title)));
-  const skipSet = new Set(loadNotInterested().map((x) => normTitle(x.title)));
-  const watchlistSet = new Set(loadWatchlist().map((x) => normTitle(x.title)));
+// Score recommendations using the precomputed manifest maps
+export function computeRecommendations(maxResults = REC_CONFIG.maxResults, profile = null) {
+  if (!runtime.MOVIE_DB.length || !runtime.recommendationManifest) return [];
+  
+  const activeMembers = [];
+  activeMembers.push(buildLocalProfile());
+  
+  const peers = (runtime.state && runtime.state.peers) || [];
+  const activePeers = peers.filter(p => p.connected !== false);
+  const peerProfiles = runtime.peerProfiles || {};
+  
+  activePeers.forEach(p => {
+    if (p.id !== runtime.myId && peerProfiles[p.id]) {
+      activeMembers.push(peerProfiles[p.id]);
+    }
+  });
+
+  const candidates = getCandidates(activeMembers);
+  
   const activeGenres = runtime.activeSelectedGenres;
   const activeLangs = runtime.activeSelectedLanguages;
-  const candidates = [];
-  for (const m of runtime.MOVIE_DB) {
-    if (!m || !m.title || !m.art) continue;
+  
+  const seenSet = roomSeenTitles();
+  const nominatedSet = new Set((runtime.state?.movies || []).map((m) => normTitle(m.title)));
+  const skipSet = new Set(loadNotInterested().map((x) => normTitle(x.title)));
+  const watchlistSet = new Set(loadWatchlist().map((x) => normTitle(x.title)));
+  
+  const scoredCandidates = [];
+  
+  for (const m of candidates) {
+    const movieObj = movieMeta(m.title, Number(m.id));
+    if (!movieObj || !movieObj.art) continue;
+    
     if (activeGenres.length > 0) {
-      const genreMatch = (m.genres || []).some((g) => activeGenres.includes(g));
+      const genreMatch = (movieObj.genres || []).some((g) => activeGenres.includes(g));
       if (!genreMatch) continue;
     }
     if (activeLangs.length > 0) {
-      if (!activeLangs.includes(m.language)) continue;
+      if (!activeLangs.includes(movieObj.language)) continue;
     }
-    const nt = normTitle(m.title);
+    
+    const nt = normTitle(movieObj.title);
     if (seenSet.has(nt) || nominatedSet.has(nt) || skipSet.has(nt)) continue;
-    let score;
-    if (personalised) score = scoreCandidate(m, profile);
-    else score = coldStartScore(m);
+    
+    // O(1) loop scoring per group member
+    const userScores = activeMembers.map(member => {
+      // 1. Plot Similarity (Max Similarity Rule)
+      let simPlot = 0;
+      if (m.topNeighbors && member.likedMovieIds) {
+        member.likedMovieIds.forEach(likedId => {
+          const score = m.topNeighbors[likedId];
+          if (score !== undefined && score > simPlot) {
+            simPlot = score;
+          }
+        });
+      }
+      
+      // 2. Genre Similarity (Jaccard Coefficient)
+      const genreMap = {};
+      (member.genreWeights || []).forEach(gw => {
+        genreMap[gw.genre] = gw.weight;
+      });
+      const userGenreSet = new Set(Object.keys(genreMap));
+      const movieGenreSet = new Set(movieObj.genres || []);
+      const intersection = new Set([...movieGenreSet].filter(x => userGenreSet.has(x)));
+      const union = new Set([...movieGenreSet, ...userGenreSet]);
+      const simGenre = union.size > 0 ? intersection.size / union.size : 0;
+      
+      // 3. Critical Score
+      const scoreCritical = m.criticalScore || 0;
+      
+      // 4. Metadata Bonuses
+      const directorSet = new Set(member.preferredDirectors || []);
+      const actorSet = new Set(member.preferredActors || []);
+      const memberWatchlistSet = new Set(member.watchlistMovieIds || []);
+      
+      let bonusDirector = 0;
+      if (movieObj.director) {
+        if (Array.isArray(movieObj.director)) {
+          if (movieObj.director.some(d => directorSet.has(d))) bonusDirector = 0.15;
+        } else if (directorSet.has(movieObj.director)) {
+          bonusDirector = 0.15;
+        }
+      }
+      
+      let bonusActor = 0;
+      if (movieObj.cast && Array.isArray(movieObj.cast)) {
+        if (movieObj.cast.some(a => actorSet.has(a))) bonusActor = 0.15;
+      }
+      
+      const bonusWatchlist = memberWatchlistSet.has(String(movieObj.id)) ? 0.12 : 0;
+      
+      // 5. Metadata Soft Penalties
+      let penaltyDislike = 0;
+      const memberDislikeGenres = new Set(member.dislikeGenres || []);
+      const memberDislikeDirectors = new Set(member.dislikeDirectors || []);
+      
+      if (movieObj.genres && movieObj.genres.some(g => memberDislikeGenres.has(g))) {
+        penaltyDislike += 0.25;
+      }
+      
+      if (movieObj.director) {
+        if (Array.isArray(movieObj.director)) {
+          if (movieObj.director.some(d => memberDislikeDirectors.has(d))) penaltyDislike += 0.25;
+        } else if (memberDislikeDirectors.has(movieObj.director)) {
+          penaltyDislike += 0.25;
+        }
+      }
+      
+      const w1 = 0.15, w2 = 0.45, w3 = 0.40;
+      return (w1 * simPlot) + (w2 * simGenre) + (w3 * scoreCritical) + bonusDirector + bonusActor + bonusWatchlist - penaltyDislike;
+    });
+    
+    // Group hybrid aggregation: 0.70 * Mean + 0.30 * Min
+    const sum = userScores.reduce((a, b) => a + b, 0);
+    const mean = userScores.length > 0 ? sum / userScores.length : 0;
+    const min = userScores.length > 0 ? Math.min(...userScores) : 0;
+    const groupScore = 0.70 * mean + 0.30 * min;
+    
     const onWatchlist = watchlistSet.has(nt);
-    candidates.push({ movie: m, score, isNew: isNewMovie(m), personalised, fromWatchlist: onWatchlist });
+    scoredCandidates.push({
+      movie: movieObj,
+      score: groupScore,
+      isNew: isNewMovie(movieObj),
+      personalised: activeMembers.some(member => (member.likedMovieIds || []).length > 0),
+      fromWatchlist: onWatchlist
+    });
   }
-  candidates.sort((a, b) => b.score - a.score);
-  return blendRecommendations(candidates, maxResults);
+  
+  scoredCandidates.sort((a, b) => b.score - a.score);
+  return blendRecommendations(scoredCandidates, maxResults);
 }
 
 export function roomSeenTitles() {
@@ -323,8 +480,8 @@ let recRankingStale = false;
 
 export function markRankingStale() {
   recRankingStale = true;
-  _myCentroids = null;
 }
+
 export function getRecCache() { return recCache; }
 
 function recSignature() {
@@ -335,18 +492,31 @@ function recSignature() {
   const seen = (runtime.state && runtime.state.seen) || {};
   const seenSig = Object.keys(seen).filter((pid) => pid !== runtime.myId).sort().map((pid) =>
     pid + ':' + (Array.isArray(seen[pid]) ? seen[pid].length : 0)).join('|');
-  const pv = (runtime.state && runtime.state.peerVectors) || {};
-  const pvSig = Object.keys(pv).sort().join('|');
-  const embReady = runtime.EMBEDDINGS_BUFFER ? '1' : '0';
+  
+  // Signature of peer profiles
+  const profiles = runtime.peerProfiles || {};
+  const profilesSig = Object.keys(profiles).sort().map(uid => {
+    const p = profiles[uid];
+    return uid + ':' + (p.likedMovieIds || []).length + ':' + (p.watchlistMovieIds || []).length;
+  }).join('|');
+
+  const embReady = runtime.recommendationManifest ? '1' : '0';
   const filt = runtime.activeSelectedGenres.join(',') + '/' + runtime.activeSelectedLanguages.join(',');
   return runtime.MOVIE_DB.length + '#' + hist
        + '#' + intr + '#' + ni + '#' + watched
-       + '#' + seenSig + '#' + pvSig + '#' + embReady + '#' + filt;
+       + '#' + seenSig + '#' + profilesSig + '#' + embReady + '#' + filt;
 }
 
 function nextRecBatch(ranked) {
-  const seen = loadSeenRecommendations();
-  const unseen = ranked.filter((rec) => !seen.has(normTitle(rec.movie.title)));
+  let seen = loadSeenRecommendations();
+  let unseen = ranked.filter((rec) => !seen.has(normTitle(rec.movie.title)));
+  
+  if (unseen.length === 0 && ranked.length > 0) {
+    seen.clear();
+    saveSeenRecommendations(seen);
+    unseen = ranked;
+  }
+  
   const reserve = Math.max(1, Math.round(REC_CONFIG.maxResults * REC_CONFIG.watchlistInjectFraction));
   const watchlistRecs = unseen.filter((rec) => rec.fromWatchlist);
   const others = unseen.filter((rec) => !rec.fromWatchlist);
@@ -367,10 +537,9 @@ function nextRecBatch(ranked) {
   return final;
 }
 
-function ensurePrecompute(sig, profile = null, forceRecompute = false) {
+function ensurePrecompute(sig, forceRecompute = false) {
   if (forceRecompute || recPrecompute.sig !== sig) {
-    if (!profile) profile = buildTasteProfile();
-    recPrecompute = { sig, ranked: computeRecommendations(runtime.MOVIE_DB.length, profile), batches: [] };
+    recPrecompute = { sig, ranked: computeRecommendations(runtime.MOVIE_DB.length), batches: [] };
     recRankingStale = false;
   }
   return recPrecompute;
@@ -380,18 +549,16 @@ function refreshStaleRanking() {
   if (!recRankingStale) return;
   recRankingStale = false;
   if (!recPrecompute || recPrecompute.ranked == null) return;
-  const profile = buildTasteProfile();
-  recPrecompute.ranked = computeRecommendations(runtime.MOVIE_DB.length, profile);
+  recPrecompute.ranked = computeRecommendations(runtime.MOVIE_DB.length);
   recPrecompute.batches = [];
 }
 
 function precomputeRecBatches(count = 2) {
   const sig = recSignature();
-  const profile = buildTasteProfile();
-  const pc = ensurePrecompute(sig, profile);
+  const pc = ensurePrecompute(sig);
   refreshStaleRanking();
   while (pc.batches.length < count) {
-    const batch = nextRecBatch(pc.ranked, profile);
+    const batch = nextRecBatch(pc.ranked);
     if (!batch.length) break;
     pc.batches.push(batch);
   }
@@ -410,9 +577,8 @@ export function getRecommendations(options = {}) {
   const forceRefresh = !!options.forceRefresh;
   const sig = recSignature();
   if (forceRefresh || !recCache.list || recCache.list.length === 0) {
-    const profile = buildTasteProfile();
-    const pc = ensurePrecompute(sig, profile, forceRefresh);
-    const list = pc.batches.length ? pc.batches.shift() : nextRecBatch(pc.ranked, profile);
+    const pc = ensurePrecompute(sig, forceRefresh);
+    const list = pc.batches.length ? pc.batches.shift() : nextRecBatch(pc.ranked);
     recCache = {
       sig,
       list,
@@ -428,19 +594,14 @@ export function getRecommendations(options = {}) {
   return recCache;
 }
 
-// Append the next batch of recommendations onto the current visible list so the
-// carousel scrolls "infinitely". Returns the updated cache; the list reference
-// only changes when there are genuinely more picks to show, so callers can
-// detect exhaustion by comparing list lengths.
 export function appendRecommendations() {
   const sig = recSignature();
   if (!Array.isArray(recCache.list) || recCache.list.length === 0) {
     return getRecommendations({ forceRefresh: true });
   }
-  const profile = buildTasteProfile();
-  const pc = ensurePrecompute(sig, profile);
+  const pc = ensurePrecompute(sig);
   refreshStaleRanking();
-  const batch = pc.batches.length ? pc.batches.shift() : nextRecBatch(pc.ranked, profile);
+  const batch = pc.batches.length ? pc.batches.shift() : nextRecBatch(pc.ranked);
   if (!batch.length) return recCache;
   recCache = {
     ...recCache,
@@ -451,29 +612,19 @@ export function appendRecommendations() {
   return recCache;
 }
 
-// Surgically swap a single actioned card (e.g. "Not Interested") out of the
-// current visible batch for the next-best recommendation, leaving every other
-// card untouched. Without this, the changed taste signal (which feeds
-// recSignature) would invalidate the whole cache and reshuffle the carousel.
-//
-// Callers must apply the underlying signal (e.g. markNotInterested) *before*
-// invoking this so the new signature is reflected when we re-stamp the cache.
 export function replaceRecommendation(title) {
   const norm = normTitle(title);
   const list = recCache.list || [];
   const idx = list.findIndex((rec) => rec && normTitle(rec.movie.title) === norm);
 
-  // Ensure we have a ranking to draw the replacement from.
   let pc = recPrecompute;
   if (!pc || pc.ranked == null) {
-    pc = ensurePrecompute(recSignature(), null, true);
+    pc = ensurePrecompute(recSignature(), true);
   }
   const ranked = pc.ranked || [];
   const newList = list.slice();
 
   if (idx >= 0) {
-    // Titles still on screen must stay put — exclude them (and the actioned
-    // title) so we never surface a duplicate or the just-dismissed movie.
     const visible = new Set();
     list.forEach((rec, i) => { if (i !== idx && rec) visible.add(normTitle(rec.movie.title)); });
     const seen = loadSeenRecommendations();
@@ -482,21 +633,16 @@ export function replaceRecommendation(title) {
       if (nt === norm || visible.has(nt)) return false;
       return allowSeen || !seen.has(nt);
     });
-    // Prefer a never-shown rec; fall back to any unshown-on-screen rec.
     const replacement = pick(false) || pick(true);
     if (replacement) {
       newList[idx] = replacement;
       seen.add(normTitle(replacement.movie.title));
       saveSeenRecommendations(seen);
     } else {
-      // Nothing left to show — just drop the dismissed card.
       newList.splice(idx, 1);
     }
   }
 
-  // Re-rank lazily on the next full refresh so the new signal fully propagates,
-  // but keep the surgically-updated list under the CURRENT signature so the
-  // imminent re-render serves it from cache instead of rebuilding the batch.
   recRankingStale = true;
   recCache = {
     sig: recSignature(),
@@ -507,7 +653,6 @@ export function replaceRecommendation(title) {
   return recCache;
 }
 
-// Recommendation-data status used by the carousel's small status indicator.
 export function recommendationDataStatus() {
   if (runtime.movieDbStatus === 'error') {
     return { level: 'error', message: `Recommendations unavailable: couldn't load movies (${runtime.movieDbError || 'unknown error'}).` };
@@ -515,11 +660,11 @@ export function recommendationDataStatus() {
   if (runtime.movieDbStatus === 'loading') {
     return { level: 'loading', message: 'Loading recommendation movies…' };
   }
-  if (runtime.embeddingsStatus === 'error') {
-    return { level: 'error', message: `Embeddings unavailable: couldn't load recommendation vectors (${runtime.embeddingsError || 'unknown error'}).` };
+  if (runtime.recommendationStatus === 'error') {
+    return { level: 'error', message: `Recommendations unavailable: couldn't load manifest (${runtime.recommendationError || 'unknown error'}).` };
   }
-  if (runtime.embeddingsStatus === 'loading') {
-    return { level: 'loading', message: 'Loading recommendation vectors…' };
+  if (runtime.recommendationStatus === 'loading') {
+    return { level: 'loading', message: 'Loading recommendation manifest…' };
   }
   return null;
 }
